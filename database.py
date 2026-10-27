@@ -11,6 +11,11 @@ import re
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+import threading
+
+_POSTGRES_POOLS: dict[str, Any] = {}
+_POSTGRES_POOLS_LOCK = threading.Lock()
+
 
 _ACTIVE_TENANT_SCHEMA: ContextVar[str | None] = ContextVar("investment_pilot_tenant_schema", default=None)
 _SCHEMA_RE = re.compile(r"^tenant_[a-f0-9]{32}$")
@@ -44,6 +49,29 @@ def active_tenant_schema() -> str | None:
     return _ACTIVE_TENANT_SCHEMA.get()
 
 
+def get_postgres_pool(dsn: str):
+    """Return a bounded, process-wide Psycopg pool for this database DSN."""
+    with _POSTGRES_POOLS_LOCK:
+        pool = _POSTGRES_POOLS.get(dsn)
+        if pool is None:
+            try:
+                from psycopg.rows import dict_row
+                from psycopg_pool import ConnectionPool
+            except ImportError as exc:
+                raise RuntimeError(
+                    "PostgreSQL connection pooling requires psycopg[binary,pool]."
+                ) from exc
+            pool = ConnectionPool(
+                conninfo=dsn,
+                min_size=1,
+                max_size=5,
+                kwargs={"row_factory": dict_row, "connect_timeout": 15},
+                open=True,
+            )
+            _POSTGRES_POOLS[dsn] = pool
+        return pool
+
+
 class _HybridRow(dict):
     """Mapping row that also permits SQLite-style numeric indexing."""
     def __init__(self, values: dict[str, Any]):
@@ -73,14 +101,15 @@ class _PostgresCursor:
 class _PostgresConnection:
     """Minimal SQLite-ish API implemented on psycopg 3 for existing portfolio SQL."""
     def __init__(self, dsn: str, schema_name: str):
+        self._pool = get_postgres_pool(dsn)
+        self._connection = self._pool.getconn(timeout=10)
         try:
-            import psycopg
-            from psycopg.rows import dict_row
-        except ImportError as exc:
-            raise RuntimeError("PostgreSQL support requires psycopg. Install requirements.txt.") from exc
-        self._connection = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=15)
-        # schema_name is validated against a strict generated schema format above.
-        self._connection.execute(f'SET search_path TO "{schema_name}", public')
+            # SET LOCAL is transaction-scoped: every checkout gets its validated
+            # tenant schema, and COMMIT/ROLLBACK clears it before pool reuse.
+            self._connection.execute(f'SET LOCAL search_path TO "{schema_name}", public')
+        except Exception:
+            self._pool.putconn(self._connection, close=True)
+            raise
 
     @staticmethod
     def _translate(sql: str) -> str:
@@ -122,8 +151,11 @@ class _PostgresConnection:
                 self._connection.commit()
             else:
                 self._connection.rollback()
-        finally:
-            self._connection.close()
+        except Exception:
+            self._pool.putconn(self._connection, close=True)
+            raise
+        else:
+            self._pool.putconn(self._connection)
         return False
 
 

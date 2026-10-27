@@ -10,7 +10,7 @@ import uuid
 from typing import Any
 from contextlib import contextmanager
 
-from database import database_url
+from database import database_url, get_postgres_pool
 
 _ITERATIONS = 310_000
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,40}$")
@@ -33,17 +33,11 @@ def _connect():
     dsn = database_url()
     if not dsn:
         raise RuntimeError("DATABASE_URL must point to the managed PostgreSQL database.")
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-    except ImportError as exc:
-        raise RuntimeError("Install PostgreSQL support with: pip install 'psycopg[binary]>=3.2,<4'") from exc
-    con = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=15)
-    try:
-        with con:
-            yield con
-    finally:
-        con.close()
+    # Reuse the app's bounded pool; pool.connection() commits/rolls back and
+    # returns the connection to the pool safely, including on exceptions.
+    pool = get_postgres_pool(dsn)
+    with pool.connection(timeout=10) as con:
+        yield con
 
 
 def _password_hash(password: str, salt: bytes | None = None) -> tuple[str, str]:
