@@ -1,0 +1,29 @@
+services:
+  etf-terminal:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      ETF_APP_DATA_DIR: /data
+      ETF_APP_LOCAL_DEV_MODE: "${ETF_APP_LOCAL_DEV_MODE:-1}"
+    volumes:
+      - etf_data:/data
+    restart: unless-stopped
+  market-data-worker:
+    build: .
+    env_file:
+      - .env
+    environment:
+      ETF_APP_DATA_DIR: /data
+      ETF_APP_LOCAL_DEV_MODE: "${ETF_APP_LOCAL_DEV_MODE:-1}"
+      ETF_MARKET_DATA_REFRESH_SECONDS: ${ETF_MARKET_DATA_REFRESH_SECONDS:-86400}
+      ETF_MARKET_DATA_HISTORY_PERIOD: ${ETF_MARKET_DATA_HISTORY_PERIOD:-5y}
+      ETF_MARKET_DATA_EXTRA_TICKERS: ${ETF_MARKET_DATA_EXTRA_TICKERS:-^GSPC,^STOXX50E,^IXIC}
+    volumes:
+      - etf_data:/data
+    command: ["python", "scripts/market_data_worker.py"]
+    restart: unless-stopped
+volumes:
+  etf_data:
