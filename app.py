@@ -154,7 +154,24 @@ st.sidebar.caption(f"Version {APP_VERSION}")
 page = st.sidebar.radio("Workspace", PAGES, index=0, label_visibility="collapsed", key="workspace_page")
 base_ccy = st.sidebar.selectbox("Reporting currency", ["PLN", "EUR", "USD", "GBP"], index=0)
 transactions = list_transactions()
-analytics = transaction_types_summary(transactions, base_ccy)
+# Transaction analytics can involve historical FX lookups. Cache it within this
+# user's Streamlit session and invalidate it whenever the ledger or currency changes.
+# The user ID in the key prevents reuse across accounts in the same browser session.
+ledger_fingerprint = (
+    pd.util.hash_pandas_object(transactions, index=True).values.tobytes()
+    if not transactions.empty else b""
+)
+analytics_cache_key = (
+    str(_current_user["user_id"]) if _current_user is not None else "local",
+    base_ccy,
+    ledger_fingerprint,
+)
+_cached_analytics = st.session_state.get("_transaction_analytics_cache")
+if _cached_analytics is not None and _cached_analytics[0] == analytics_cache_key:
+    analytics = _cached_analytics[1]
+else:
+    analytics = transaction_types_summary(transactions, base_ccy)
+    st.session_state["_transaction_analytics_cache"] = (analytics_cache_key, analytics)
 active_tickers = sorted([t for t, p in analytics["positions"].items() if p["quantity"] > 1e-10])
 
 if "quotes" not in st.session_state:
@@ -172,7 +189,7 @@ with st.sidebar:
             st.session_state.quotes = get_quotes(active_tickers, force_refresh=True)
             st.session_state.quotes_for = active_tickers[:]
             st.session_state.last_refresh = pd.Timestamp.now(tz="Europe/Warsaw").strftime("%Y-%m-%d %H:%M:%S %Z")
-            report = build_portfolio(transactions, st.session_state.quotes, base_ccy)
+            report = build_portfolio(transactions, st.session_state.quotes, base_ccy, analytics=analytics)
             save_snapshot(report, base_ccy, "Manual refresh")
         st.rerun()
     if st.session_state.last_refresh:
@@ -198,7 +215,7 @@ if not quotes.empty and "fetched_at" in quotes.columns:
     fetched_values = pd.to_datetime(quotes["fetched_at"], errors="coerce", utc=True).dropna()
     if not fetched_values.empty:
         quote_fetch_label = fetched_values.max().strftime("%Y-%m-%d %H:%M:%S UTC")
-portfolio = build_portfolio(transactions, quotes, base_ccy)
+portfolio = build_portfolio(transactions, quotes, base_ccy, analytics=analytics)
 metrics = portfolio_metrics(portfolio, base_ccy)
 
 
@@ -341,7 +358,7 @@ elif page == "Investments":
                 st.session_state.quotes = get_quotes(active_tickers, force_refresh=True)
                 st.session_state.quotes_for = active_tickers[:]
                 st.session_state.last_refresh = pd.Timestamp.now(tz="Europe/Warsaw").strftime("%Y-%m-%d %H:%M:%S %Z")
-                refreshed_portfolio = build_portfolio(transactions, st.session_state.quotes, base_ccy)
+                refreshed_portfolio = build_portfolio(transactions, st.session_state.quotes, base_ccy, analytics=analytics)
                 save_snapshot(refreshed_portfolio, base_ccy, "Manual refresh from Investments")
             st.rerun()
 

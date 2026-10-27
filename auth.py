@@ -195,9 +195,16 @@ def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
     st.title("Investment Pilot")
     st.caption("Private investment workspace · administrator-provisioned accounts")
-    message = ensure_bootstrap_admin()
-    if message:
-        st.info(message)
+    # Bootstrap/schema setup is needed once per Streamlit browser session, not
+    # on every page rerun. Keep retrying only if configuration is still invalid.
+    if not st.session_state.get("_bootstrap_checked", False):
+        message = ensure_bootstrap_admin()
+        if message:
+            st.info(message)
+            if message.startswith("Created bootstrap administrator"):
+                st.session_state["_bootstrap_checked"] = True
+        else:
+            st.session_state["_bootstrap_checked"] = True
     session_user_id = st.session_state.get("auth_user_id")
     if session_user_id:
         current = load_active_user(session_user_id)

@@ -879,10 +879,18 @@ def get_quotes(
         result[col] = pd.to_numeric(result[col], errors="coerce")
     return result
 
-def build_portfolio(transactions: pd.DataFrame, quotes: pd.DataFrame, base_ccy: str = "PLN") -> pd.DataFrame:
+def build_portfolio(
+    transactions: pd.DataFrame,
+    quotes: pd.DataFrame,
+    base_ccy: str = "PLN",
+    *,
+    analytics: dict[str, Any] | None = None,
+) -> pd.DataFrame:
     if transactions.empty:
         return pd.DataFrame()
-    analytics = transaction_types_summary(transactions, base_ccy)
+    # Reuse the caller's transaction summary when it has already been computed.
+    if analytics is None:
+        analytics = transaction_types_summary(transactions, base_ccy)
     positions = analytics["positions"]
     active = [{"ticker": ticker, **info} for ticker, info in positions.items() if info["quantity"] > 1e-10]
     if not active:
