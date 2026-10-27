@@ -187,7 +187,7 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
 
 def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
-    st.title("Investment Pilot")
+    st.title("Investment Copilot")
     st.caption("Private investment workspace · administrator-provisioned accounts")
     # Bootstrap/schema setup is needed once per Streamlit browser session, not
     # on every page rerun. Keep retrying only if configuration is still invalid.
