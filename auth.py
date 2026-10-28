@@ -219,35 +219,20 @@ def _cookie_manager(st):
 def _set_auth_cookie(
     st, token: str, expires_at: datetime, stay_signed_in: bool
 ) -> None:
-    """Set a persistent cookie only when the user explicitly requests it."""
+    """Set a cookie with the same lifetime as its server-side session."""
     manager = _cookie_manager(st)
 
-    if stay_signed_in:
-        manager.set(
-            _SESSION_COOKIE_NAME,
-            token,
-            key="set_auth_session_cookie",
-            path="/",
-            expires_at=expires_at,
-            secure=True,
-            same_site="strict",
-        )
-    else:
-        # CookieManager.set() supplies a default one-day expiry when omitted.
-        # Call its component directly to create a browser-session cookie instead.
-        manager.cookie_manager(
-            method="set",
-            cookie=_SESSION_COOKIE_NAME,
-            value=token,
-            options={
-                "path": "/",
-                "secure": True,
-                "sameSite": "strict",
-            },
-            key="set_auth_session_cookie",
-            default=False,
-        )
-
+    # Use one CookieManager.set() path for both sign-in choices. The server-side
+    # expiry is 12 hours when unchecked and 30 days when checked.
+    manager.set(
+        _SESSION_COOKIE_NAME,
+        token,
+        key="set_auth_session_cookie",
+        path="/",
+        expires_at=expires_at,
+        secure=True,
+        same_site="strict",
+    )
 def _delete_auth_cookie(st, key: str) -> bool:
     try:
         manager = _cookie_manager(st)
@@ -463,7 +448,7 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                 "Stay signed in on this device (30 days)",
                 value=False,
                 key="login_stay_signed_in",
-                help="If unchecked, the cookie lasts for this browser session and the server-side sign-in expires after 12 hours.",
+                help="When unchecked, sign-in lasts up to 12 hours. When checked, it lasts up to 30 days.",
             )
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
