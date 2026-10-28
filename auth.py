@@ -434,9 +434,12 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 revoke_auth_session(token)
                 st.error("Could not establish the browser session. Please refresh and try again.")
             else:
-                # Wait for the browser cookie component to return the saved token.
-                # The next rerun will authenticate using that browser-returned value.
-                st.info("Signing you in…")
+                # Complete login in this Streamlit session immediately.
+                # The browser cookie is used to restore login after refresh.
+                st.session_state["auth_session_token"] = token
+                st.session_state["auth_user_id"] = user["user_id"]
+                st.session_state["_auth_cookie_probe_complete"] = True
+                st.rerun()
         else:
             st.error("Sign-in failed. Check your credentials or contact the administrator.")
     st.caption("Accounts are created by an administrator. Self-registration is disabled.")
