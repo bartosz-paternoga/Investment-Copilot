@@ -187,32 +187,24 @@ def revoke_auth_session(token: str | None) -> None:
 
 
 def _request_session_cookie(st) -> str | None:
-    """Read the session token from the browser cookie manager."""
+    """Read the token from the cookie component rendered during this script run."""
     try:
         manager = _cookie_manager(st)
         token = manager.get(_SESSION_COOKIE_NAME)
         if token:
             return str(token)
-
-        # Refresh the component's cookie snapshot, which can initially be empty
-        # while the browser component is loading.
-        cookies = manager.get_all()
-        token = cookies.get(_SESSION_COOKIE_NAME) if cookies else None
-        if token:
-            return str(token)
     except Exception:
         pass
 
-    # Fallback for cookies supplied with the initial request.
+    # Fallback to cookies received with the initial browser request.
     try:
         token = st.context.cookies.get(_SESSION_COOKIE_NAME)
         return str(token) if token else None
     except Exception:
         return None
 
-
 def _cookie_manager(st):
-    """Initialize the browser cookie component once per Streamlit session."""
+    """Return the cookie component for the current script run."""
     manager = st.session_state.get("_auth_cookie_manager")
     if manager is None:
         import extra_streamlit_components as stx
@@ -222,18 +214,37 @@ def _cookie_manager(st):
     return manager
 
 
-def _set_auth_cookie(st, token: str, expires_at: datetime) -> None:
+def _set_auth_cookie(
+    st, token: str, expires_at: datetime, stay_signed_in: bool
+) -> None:
+    """Set a persistent cookie only when the user explicitly requests it."""
     manager = _cookie_manager(st)
-    manager.set(
-        _SESSION_COOKIE_NAME,
-        token,
-        key="set_auth_session_cookie",
-        path="/",
-        expires_at=expires_at,
-        secure=True,
-        same_site="strict",
-    )
 
+    if stay_signed_in:
+        manager.set(
+            _SESSION_COOKIE_NAME,
+            token,
+            key="set_auth_session_cookie",
+            path="/",
+            expires_at=expires_at,
+            secure=True,
+            same_site="strict",
+        )
+    else:
+        # CookieManager.set() supplies a default one-day expiry when omitted.
+        # Call its component directly to create a browser-session cookie instead.
+        manager.cookie_manager(
+            method="set",
+            cookie=_SESSION_COOKIE_NAME,
+            value=token,
+            options={
+                "path": "/",
+                "secure": True,
+                "sameSite": "strict",
+            },
+            key="set_auth_session_cookie",
+            default=False,
+        )
 
 def _delete_auth_cookie(st, key: str) -> bool:
     try:
@@ -333,6 +344,10 @@ def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
     st.title("Investment Copilot")
     st.caption("Private investment workspace · administrator-provisioned accounts")
+
+    # A component instance must be recreated on each script run so its browser
+    # cookie snapshot can be refreshed. Reuse it only within this run.
+    st.session_state.pop("_auth_cookie_manager", None)
     try:
         _cookie_manager(st)
     except Exception:
@@ -354,6 +369,17 @@ def render_auth_gate(st) -> dict[str, Any] | None:
     session_token = st.session_state.get("auth_session_token")
     if not session_token and not skip_cookie_once:
         session_token = _request_session_cookie(st)
+
+    # Allow the browser cookie component one roundtrip before showing the login
+    # form. This avoids flashing the login screen while an existing session loads.
+    if (
+        not session_token
+        and not skip_cookie_once
+        and not st.session_state.get("_auth_cookie_probe_complete", False)
+    ):
+        st.session_state["_auth_cookie_probe_complete"] = True
+        st.info("Restoring your session…")
+        return None
 
     current = load_auth_session(session_token) if session_token else None
     if current and session_token:
@@ -403,7 +429,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
         if user:
             token, expires_at = create_auth_session(user["user_id"], stay_signed_in)
             try:
-                _set_auth_cookie(st, token, expires_at)
+                _set_auth_cookie(st, token, expires_at, stay_signed_in)
             except Exception:
                 revoke_auth_session(token)
                 st.error("Could not establish the browser session. Please refresh and try again.")
