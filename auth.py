@@ -374,7 +374,23 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             # login form covered while validating it and opening the workspace.
             show_transition("Investment Copilot")
 
-    current = load_auth_session(session_token) if session_token else None
+    # CookieManager reports its browser-side set result by triggering one more
+    # Streamlit run. Reuse the account already verified by password auth during
+    # that single handoff, then require normal server-session validation again.
+    login_transition = st.session_state.pop("_auth_login_transition", None)
+    transition_user = None
+    if session_token and isinstance(login_transition, dict):
+        transition_hash = str(login_transition.get("token_hash", ""))
+        transition_deadline = float(login_transition.get("deadline", 0.0))
+        if (
+            transition_hash
+            and hmac.compare_digest(transition_hash, _session_token_hash(session_token))
+            and time.monotonic() <= transition_deadline
+        ):
+            candidate = login_transition.get("user")
+            if isinstance(candidate, dict):
+                transition_user = candidate
+    current = transition_user or (load_auth_session(session_token) if session_token else None)
     if current and session_token:
         st.session_state["auth_session_token"] = session_token
         st.session_state["auth_user_id"] = current["user_id"]
@@ -495,6 +511,18 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                             password_2 = st.text_input("Confirm new password", type="password")
                             submit = st.form_submit_button("Save password", type="primary")
                     return None
+                st.session_state["_auth_login_transition"] = {
+                    "token_hash": _session_token_hash(token),
+                    "user": {
+                        key: user[key]
+                        for key in (
+                            "user_id", "username", "display_name", "email", "role",
+                            "tenant_schema", "active", "must_change_password",
+                        )
+                        if key in user
+                    },
+                    "deadline": time.monotonic() + 15,
+                }
                 return user
         else:
             st.session_state["_auth_transition_loading"] = False
