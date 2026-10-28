@@ -25,6 +25,7 @@ LEGACY_HOLDINGS_PATH = DATA_DIR / "holdings.csv"
 VALID_TYPES = {"BUY", "SELL", "OPENING", "DIVIDEND", "FEE", "CASH_IN", "CASH_OUT"}
 FX_CACHE: dict[tuple[str, str, str], tuple[float, str]] = {}
 FX_CACHE_TIME: dict[tuple[str, str, str], float] = {}
+FX_CACHE_FETCHED_AT: dict[tuple[str, str, str], str] = {}
 _DB_INIT_LOCK = threading.RLock()
 _INITIALIZED_DB_KEYS: set[tuple[str, str]] = set()
 
@@ -84,8 +85,22 @@ def _initialize_schema_tables() -> None:
             notes TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         con.execute("""CREATE TABLE IF NOT EXISTS watchlist (
-            ticker TEXT PRIMARY KEY, added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, note TEXT NOT NULL DEFAULT ''
+            ticker TEXT PRIMARY KEY, added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            note TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0
         )""")
+        # Existing installs predate user-controlled watchlist ordering.
+        if database_url():
+            watchlist_columns = {str(row["column_name"]) for row in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema=current_schema() AND table_name='watchlist'"
+            ).fetchall()}
+        else:
+            watchlist_columns = {str(row["name"]) for row in con.execute("PRAGMA table_info(watchlist)").fetchall()}
+        if "sort_order" not in watchlist_columns:
+            con.execute("ALTER TABLE watchlist ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            existing_watchlist = con.execute("SELECT ticker FROM watchlist ORDER BY added_at DESC, ticker").fetchall()
+            for order, row in enumerate(existing_watchlist, start=1):
+                con.execute("UPDATE watchlist SET sort_order=? WHERE ticker=?", (order, row["ticker"]))
         con.execute("""CREATE TABLE IF NOT EXISTS fx_rates (
             source_currency TEXT NOT NULL, target_currency TEXT NOT NULL, requested_date TEXT NOT NULL,
             rate REAL NOT NULL, returned_date TEXT NOT NULL, cached_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -276,8 +291,13 @@ def add_watchlist_ticker(ticker: str, note: str = "") -> None:
     if not ticker or len(ticker) > 40:
         raise ValueError("Enter a valid ticker or listing symbol.")
     with _connect() as con:
-        con.execute("INSERT INTO watchlist(ticker,note) VALUES(?,?) ON CONFLICT(ticker) DO UPDATE SET note=excluded.note",
-                    (ticker, str(note or "")[:500]))
+        row = con.execute("SELECT sort_order FROM watchlist WHERE ticker=?", (ticker,)).fetchone()
+        if row is None:
+            next_order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM watchlist").fetchone()[0]
+            con.execute("INSERT INTO watchlist(ticker,note,sort_order) VALUES(?,?,?)",
+                        (ticker, str(note or "")[:500], int(next_order)))
+        else:
+            con.execute("UPDATE watchlist SET note=? WHERE ticker=?", (str(note or "")[:500], ticker))
 
 
 def remove_watchlist_ticker(ticker: str) -> None:
@@ -289,8 +309,21 @@ def remove_watchlist_ticker(ticker: str) -> None:
 def list_watchlist() -> pd.DataFrame:
     initialize_db()
     with _connect() as con:
-        rows = con.execute("SELECT * FROM watchlist ORDER BY added_at DESC, ticker").fetchall()
-    return pd.DataFrame([dict(r) for r in rows], columns=["ticker", "added_at", "note"])
+        rows = con.execute("SELECT * FROM watchlist ORDER BY sort_order, added_at DESC, ticker").fetchall()
+    return pd.DataFrame([dict(r) for r in rows], columns=["ticker", "added_at", "note", "sort_order"])
+
+
+def save_watchlist_order(tickers: Iterable[str]) -> None:
+    """Save the complete user-selected order for the current watchlist."""
+    symbols = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    if len(symbols) != len(set(symbols)):
+        raise ValueError("Each instrument must have a different order number.")
+    with _connect() as con:
+        current = {str(row["ticker"]).upper() for row in con.execute("SELECT ticker FROM watchlist").fetchall()}
+        if set(symbols) != current:
+            raise ValueError("The watchlist changed while you were editing it. Refresh the page and try again.")
+        for order, symbol in enumerate(symbols, start=1):
+            con.execute("UPDATE watchlist SET sort_order=? WHERE ticker=?", (order, symbol))
 
 
 def list_transactions() -> pd.DataFrame:
@@ -590,7 +623,7 @@ def position_quantities() -> dict[str, float]:
     return {t: p["quantity"] for t, p in positions.items()}
 
 
-def fx_rate(source: str, target: str, on_date: str | None = None) -> float | None:
+def fx_rate(source: str, target: str, on_date: str | None = None, *, force_refresh: bool = False) -> float | None:
     source = str(source or "").upper().strip()
     target = str(target or "").upper().strip()
     if not source or not target:
@@ -601,18 +634,23 @@ def fx_rate(source: str, target: str, on_date: str | None = None) -> float | Non
     key = (source, target, req_date)
     if key in FX_CACHE:
         age = time.time() - FX_CACHE_TIME.get(key, 0.0)
-        if req_date != "latest" or age < 1800:
+        if not force_refresh and (req_date != "latest" or age < 1800):
             return FX_CACHE[key][0]
         FX_CACHE.pop(key, None)
         FX_CACHE_TIME.pop(key, None)
+        FX_CACHE_FETCHED_AT.pop(key, None)
     try:
-        with _connect() as con:
-            cached = con.execute("""SELECT rate,returned_date,cached_at FROM fx_rates
-                WHERE source_currency=? AND target_currency=? AND requested_date=?
-                AND (? != 'latest' OR cached_at >= datetime('now','-30 minutes'))""", (*key, req_date)).fetchone()
+        cached = None
+        if not force_refresh:
+            with _connect() as con:
+                cached = con.execute("""SELECT rate,returned_date,cached_at FROM fx_rates
+                    WHERE source_currency=? AND target_currency=? AND requested_date=?
+                    AND (? != 'latest' OR cached_at >= datetime('now','-30 minutes'))""", (*key, req_date)).fetchone()
         if cached is not None:
             FX_CACHE[key] = (float(cached["rate"]), str(cached["returned_date"]))
             FX_CACHE_TIME[key] = time.time()
+            cached_at = cached["cached_at"]
+            FX_CACHE_FETCHED_AT[key] = cached_at.isoformat() if hasattr(cached_at, "isoformat") else str(cached_at)
             return float(cached["rate"])
     except Exception:
         # Database tables may not yet exist when fx_rate is called independently.
@@ -628,6 +666,7 @@ def fx_rate(source: str, target: str, on_date: str | None = None) -> float | Non
             return None
         FX_CACHE[key] = (rate, returned_date)
         FX_CACHE_TIME[key] = time.time()
+        FX_CACHE_FETCHED_AT[key] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _save_fx_rate(source, target, req_date, rate, returned_date)
         return rate
     except Exception:
@@ -642,6 +681,7 @@ def fx_rate(source: str, target: str, on_date: str | None = None) -> float | Non
                 return None
             FX_CACHE[key] = (rate, returned_date)
             FX_CACHE_TIME[key] = time.time()
+            FX_CACHE_FETCHED_AT[key] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             _save_fx_rate(source, target, req_date, rate, returned_date)
             return rate
         except Exception:
@@ -670,6 +710,93 @@ def fx_returned_date(source: str, target: str, on_date: str | None = None) -> st
         return cached[1]
     inverse = FX_CACHE.get((pair[1], pair[0], pair[2]))
     return inverse[1] if inverse else None
+
+
+def fx_rate_info(
+    source: str, target: str, on_date: str | None = None, *, force_refresh: bool = False
+) -> dict[str, Any] | None:
+    """Return an FX rate with its provider fixing date and cache/fetch timestamp."""
+    source = str(source or "").upper().strip()
+    target = str(target or "").upper().strip()
+    if not source or not target:
+        return None
+    rate = fx_rate(source, target, on_date, force_refresh=force_refresh)
+    if rate is None:
+        return None
+    req_date = str(on_date)[:10] if on_date else "latest"
+    if source == target:
+        return {"rate": float(rate), "returned_date": req_date if req_date != "latest" else date.today().isoformat(),
+                "fetched_at": None}
+    key = (source, target, req_date)
+    fetched_at = FX_CACHE_FETCHED_AT.get(key)
+    returned_date = fx_returned_date(source, target, on_date)
+    if not fetched_at:
+        # Covers rates loaded by another code path or retained in a database cache.
+        try:
+            with _connect() as con:
+                cached = con.execute("""SELECT returned_date,cached_at FROM fx_rates
+                    WHERE source_currency=? AND target_currency=? AND requested_date=?""", key).fetchone()
+            if cached is not None:
+                returned_date = str(cached["returned_date"])
+                cached_at = cached["cached_at"]
+                fetched_at = cached_at.isoformat() if hasattr(cached_at, "isoformat") else str(cached_at)
+                FX_CACHE_FETCHED_AT[key] = fetched_at
+        except Exception:
+            pass
+    return {"rate": float(rate), "returned_date": returned_date, "fetched_at": fetched_at}
+
+
+def fx_spot_pair_tickers(currencies: Iterable[str], target: str, *, inverse: bool = False) -> list[str]:
+    """Return direct or inverse Yahoo Finance pair symbols for current spot quotes."""
+    target = str(target or "").upper().strip()
+    pairs: list[str] = []
+    for raw_currency in currencies:
+        source = str(raw_currency or "").upper().strip()
+        if not source or not target or source == target:
+            continue
+        pairs.append(f"{target}{source}=X" if inverse else f"{source}{target}=X")
+    return list(dict.fromkeys(pairs))
+
+
+def fx_spot_rate_info(source: str, target: str, quotes: pd.DataFrame | None) -> dict[str, Any] | None:
+    """Resolve a current Yahoo FX quote, returning quote metadata and inverse support.
+
+    The pair quote is used for current portfolio values and daily P/L. Historical
+    performance calculations continue to use dated daily reference FX fixings.
+    """
+    source = str(source or "").upper().strip()
+    target = str(target or "").upper().strip()
+    if not source or not target:
+        return None
+    if source == target:
+        return {"rate": 1.0, "previous_rate": 1.0, "returned_date": "—", "fetched_at": None,
+                "ticker": "", "kind": "same currency"}
+    if quotes is None or quotes.empty or "ticker" not in quotes:
+        return None
+    indexed = quotes.drop_duplicates("ticker", keep="last").set_index("ticker", drop=False)
+    for ticker, inverse in ((f"{source}{target}=X", False), (f"{target}{source}=X", True)):
+        if ticker not in indexed.index:
+            continue
+        row = indexed.loc[ticker]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[-1]
+        try:
+            price = float(row.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(price) or price <= 0:
+            continue
+        try:
+            previous = float(row.get("previous_close"))
+        except (TypeError, ValueError):
+            previous = np.nan
+        if inverse:
+            price = 1.0 / price
+            previous = 1.0 / previous if np.isfinite(previous) and previous > 0 else np.nan
+        return {"rate": price, "previous_rate": previous if np.isfinite(previous) and previous > 0 else None,
+                "returned_date": str(row.get("price_date", "") or ""),
+                "fetched_at": row.get("fetched_at"), "ticker": ticker, "kind": "spot"}
+    return None
 
 
 def get_fx_history(
@@ -910,14 +1037,36 @@ def build_portfolio(
     out["currency"] = out["currency"].fillna("").astype(str).str.upper()
     out["price"] = pd.to_numeric(out["price"], errors="coerce")
     out["market_value_local"] = out["quantity"] * out["price"]
-    out["fx_to_base"] = out["currency"].map(lambda c: fx_rate(c, base_ccy) if c else None)
+    fx_info_by_currency: dict[str, dict[str, Any]] = {}
+    for currency in out["currency"].dropna().astype(str).str.upper().unique():
+        if not currency:
+            continue
+        spot_info = fx_spot_rate_info(currency, base_ccy, quotes)
+        if spot_info is not None:
+            fx_info_by_currency[currency] = spot_info
+        else:
+            reference_rate = fx_rate(currency, base_ccy)
+            fx_info_by_currency[currency] = {
+                "rate": reference_rate, "previous_rate": reference_rate,
+                "returned_date": fx_returned_date(currency, base_ccy), "fetched_at": None,
+                "ticker": "", "kind": "reference",
+            }
+    out["fx_to_base"] = out["currency"].map(lambda c: fx_info_by_currency.get(str(c).upper(), {}).get("rate"))
+    out["fx_previous_to_base"] = out["currency"].map(lambda c: fx_info_by_currency.get(str(c).upper(), {}).get("previous_rate"))
+    out["fx_source"] = out["currency"].map(lambda c: fx_info_by_currency.get(str(c).upper(), {}).get("kind", "reference"))
     out["market_value_base"] = out["market_value_local"] * out["fx_to_base"]
     out["unrealized_pl_base"] = out.apply(lambda r: r["market_value_base"] - r["cost_basis_base"] if pd.notna(r["market_value_base"]) and r["cost_basis_known"] and r["cost_basis_base"] is not None else np.nan, axis=1)
     out["unrealized_pl_pct"] = out.apply(lambda r: r["unrealized_pl_base"] / r["cost_basis_base"] * 100 if pd.notna(r["unrealized_pl_base"]) and r["cost_basis_base"] > 0 else np.nan, axis=1)
     total = out["market_value_base"].sum(min_count=1)
     valuation_complete = bool(out["market_value_base"].notna().all())
     out["weight_pct"] = out["market_value_base"] / total * 100 if valuation_complete and pd.notna(total) and total > 0 else np.nan
-    out["day_change_base"] = out["market_value_base"] * pd.to_numeric(out["day_change_pct"], errors="coerce") / 100
+    previous_price_values = out["previous_close"] if "previous_close" in out else pd.Series(np.nan, index=out.index)
+    previous_price = pd.to_numeric(previous_price_values, errors="coerce")
+    previous_fx = pd.to_numeric(out["fx_previous_to_base"], errors="coerce").fillna(out["fx_to_base"])
+    full_day_change = out["quantity"] * (previous_price * previous_fx - out["price"] * out["fx_to_base"])
+    out["day_change_base"] = -full_day_change
+    price_only_day_change = out["market_value_base"] * pd.to_numeric(out["day_change_pct"], errors="coerce") / 100
+    out["day_change_base"] = out["day_change_base"].where(previous_price.notna(), price_only_day_change)
     out.attrs["analytics"] = analytics
     out.attrs["valuation_complete"] = valuation_complete
     return out
@@ -994,6 +1143,21 @@ def _cached_history(symbols: list[str], period: str) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
     return frame.pivot_table(index="price_date", columns="ticker", values="adjusted_close", aggfunc="last").sort_index()
+
+
+def get_history_fetch_times(tickers: Iterable[str]) -> dict[str, str]:
+    """Return the latest cache write time for each ticker's adjusted price history."""
+    symbols = list(dict.fromkeys(str(t).strip().upper() for t in tickers if str(t).strip()))
+    if not symbols:
+        return {}
+    initialize_db()
+    placeholders = ",".join("?" for _ in symbols)
+    with _connect() as con:
+        rows = con.execute(
+            f"SELECT ticker,MAX(fetched_at) AS fetched_at FROM market_prices WHERE ticker IN ({placeholders}) GROUP BY ticker",
+            symbols,
+        ).fetchall()
+    return {str(row["ticker"]): str(row["fetched_at"] or "") for row in rows}
 
 
 def get_history(tickers: Iterable[str], period: str = "1y", *, force_refresh: bool = False) -> pd.DataFrame:

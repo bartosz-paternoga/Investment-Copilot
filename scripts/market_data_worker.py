@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scheduled market-data ingestion worker for Investment Pilot.
+"""Scheduled market-data ingestion worker for Investment Copilot.
 
 Run persistently (Docker Compose starts it as a separate service) or with
 --once from cron. It shares the application's SQLite database and never trades.
@@ -21,8 +21,9 @@ if str(ROOT) not in sys.path:
 import pandas as pd
 
 from portfolio import (
-    build_portfolio, get_history, get_quotes, initialize_db, list_transactions,
-    list_watchlist, log_market_data_run, save_snapshot, transaction_types_summary,
+    build_portfolio, fx_rate_info, fx_spot_pair_tickers, fx_spot_rate_info, get_history, get_quotes,
+    initialize_db, list_transactions, list_watchlist, log_market_data_run, save_snapshot,
+    transaction_types_summary,
 )
 
 
@@ -50,6 +51,23 @@ def run_refresh() -> dict[str, object]:
     symbols = configured_universe(transactions)
     try:
         quotes = get_quotes(symbols, force_refresh=True, max_age_seconds=0)
+        currencies = set(quotes["currency"].fillna("").astype(str).str.upper()) if not quotes.empty else set()
+        missing_spot = {currency for currency in currencies
+                        if currency and fx_spot_rate_info(currency, "PLN", quotes) is None}
+        spot_tickers = [symbol for symbol in fx_spot_pair_tickers(missing_spot, "PLN") if symbol not in set(symbols)]
+        spot_quotes = get_quotes(spot_tickers, force_refresh=True, max_age_seconds=0)
+        if not spot_quotes.empty:
+            quotes = pd.concat([quotes, spot_quotes], ignore_index=True).drop_duplicates("ticker", keep="last")
+        missing_spot = {currency for currency in missing_spot
+                        if fx_spot_rate_info(currency, "PLN", quotes) is None}
+        inverse_tickers = [symbol for symbol in fx_spot_pair_tickers(missing_spot, "PLN", inverse=True)
+                           if symbol not in set(symbols)]
+        inverse_quotes = get_quotes(inverse_tickers, force_refresh=True, max_age_seconds=0)
+        if not inverse_quotes.empty:
+            quotes = pd.concat([quotes, inverse_quotes], ignore_index=True).drop_duplicates("ticker", keep="last")
+        for currency in currencies - {"", "PLN"}:
+            if fx_spot_rate_info(currency, "PLN", quotes) is None:
+                fx_rate_info(currency, "PLN", force_refresh=True)
         if not quotes.empty:
             failed = quotes.loc[quotes["status"].isin(["Unavailable", "Incomplete", "Stale"]), "ticker"].astype(str).tolist()
             if failed:
@@ -83,14 +101,16 @@ def run_refresh() -> dict[str, object]:
         errors.append(f"{type(exc).__name__}: {exc}")
     finished = datetime.now(timezone.utc).isoformat(timespec="seconds")
     detail = "; ".join(errors) if errors else f"Refreshed {len(symbols)} symbols in {time.monotonic()-start_mark:.1f}s"
-    log_market_data_run(started, finished, status, len(symbols), history_rows, detail)
-    result = {"status": status, "tickers": len(symbols), "history_rows": history_rows, "duration_seconds": round(time.monotonic()-start_mark, 1), "detail": detail}
+    refreshed_quotes = (len(symbols) + len(locals().get("spot_tickers", []))
+                        + len(locals().get("inverse_tickers", [])))
+    log_market_data_run(started, finished, status, refreshed_quotes, history_rows, detail)
+    result = {"status": status, "tickers": refreshed_quotes, "history_rows": history_rows, "duration_seconds": round(time.monotonic()-start_mark, 1), "detail": detail}
     print(f"[{finished}] {result}", flush=True)
     return result
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Investment Pilot scheduled market-data ingestion")
+    parser = argparse.ArgumentParser(description="Investment Copilot scheduled market-data ingestion")
     parser.add_argument("--once", action="store_true", help="Run once and exit (useful with cron/systemd timer)")
     parser.add_argument("--interval-seconds", type=int, default=int(os.getenv("ETF_MARKET_DATA_REFRESH_SECONDS", "86400")),
                         help="Delay between scheduled runs; default 86400 seconds")

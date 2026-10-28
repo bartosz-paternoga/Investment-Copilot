@@ -4,7 +4,7 @@ This build uses PostgreSQL for hosted storage, a shared authentication table in 
 
 ## 1. Create a PostgreSQL database
 
-Use a managed PostgreSQL provider such as Supabase or Neon. Create a dedicated database/project for Investment Pilot. Use a server-side PostgreSQL connection string (`DATABASE_URL`) with TLS enabled and a database role permitted to create schemas/tables. Do not put a database password or privileged connection string in code, a GitHub commit, a public issue, or a client-side/browser variable. Use the provider's direct or session-mode connection string if its transaction-pooling connection does not support session-level `search_path` consistently.
+Use a managed PostgreSQL provider such as Supabase or Neon. Create a dedicated database/project for Investment Copilot. Use a server-side PostgreSQL connection string (`DATABASE_URL`) with TLS enabled and a database role permitted to create schemas/tables. Do not put a database password or privileged connection string in code, a GitHub commit, a public issue, or a client-side/browser variable. Use the provider's direct or session-mode connection string if its transaction-pooling connection does not support session-level `search_path` consistently.
 
 The first connection needs permission to create `app_private.auth_users`, a tenant schema, and tables/indexes inside tenant schemas. Portfolio rows are not migrated automatically: each new tenant begins with an empty investment ledger. The previous SQLite database/archive stays separate and is never imported by hosted mode.
 
@@ -16,7 +16,7 @@ The first connection needs permission to create `app_private.auth_users`, a tena
    ```bash
    git init
    git add .
-   git commit -m "Prepare Investment Pilot for hosted PostgreSQL"
+   git commit -m "Prepare Investment Copilot for hosted PostgreSQL"
    git branch -M main
    git remote add origin https://github.com/YOUR-ORG/YOUR-REPO.git
    git push -u origin main
