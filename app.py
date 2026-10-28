@@ -113,7 +113,6 @@ def _render_cookie_probe_timeout() -> None:
         if time.monotonic() >= deadline:
             st.session_state["_auth_cookie_probe_complete"] = True
             st.session_state.pop("_auth_cookie_probe_pending", None)
-            _clear_auth_transition_overlay()
             st.rerun()
 
     cookie_probe_timeout()
