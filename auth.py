@@ -187,18 +187,18 @@ def revoke_auth_session(token: str | None) -> None:
 
 
 def _request_session_cookie(st) -> str | None:
-    """Read a token sent with the initial request, then fall back to the component."""
+    """Read the session token from the initial request, with an older-version fallback."""
     try:
-        # Streamlit exposes cookies from the browser's initial request. Read this
-        # first so session restoration does not depend on a component roundtrip.
-        token = st.context.cookies.get(_SESSION_COOKIE_NAME)
-        if token:
-            return str(token)
+        # Streamlit's request snapshot is available in the supported versions.
+        # An empty result means this browser request did not include our cookie.
+        request_cookies = st.context.cookies
     except Exception:
-        pass
+        request_cookies = None
+    if request_cookies is not None:
+        token = request_cookies.get(_SESSION_COOKIE_NAME)
+        return str(token) if token else None
 
-    # The component is a fallback for Streamlit versions/contexts where the
-    # initial request cookie is unavailable.
+    # Fallback only for older Streamlit contexts without request-cookie access.
     try:
         token = _cookie_manager(st).get(_SESSION_COOKIE_NAME)
         return str(token) if token else None
@@ -344,17 +344,9 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
 
 def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
-    st.title("Investment Copilot")
-    st.caption("Private investment workspace · administrator-provisioned accounts")
-
-    # A component instance must be recreated on each script run so its browser
-    # cookie snapshot can be refreshed. Reuse it only within this run.
+    auth_screen = st.empty()
+    # Recreate the component only if this run needs to read or change a cookie.
     st.session_state.pop("_auth_cookie_manager", None)
-    try:
-        _cookie_manager(st)
-    except Exception:
-        st.error("Browser session support could not be initialized. Please reload and try again.")
-        return None
     # Bootstrap/schema setup is needed once per Streamlit browser session, not
     # on every page rerun. Keep retrying only if configuration is still invalid.
     if not st.session_state.get("_bootstrap_checked", False):
@@ -378,12 +370,15 @@ def render_auth_gate(st) -> dict[str, Any] | None:
         st.session_state["auth_user_id"] = current["user_id"]
 
         if current["must_change_password"]:
-            st.subheader("Set your password")
-            st.warning("Your administrator issued a temporary password. Choose a new password to continue.")
-            with st.form("required_password_change"):
-                password_1 = st.text_input("New password", type="password")
-                password_2 = st.text_input("Confirm new password", type="password")
-                submit = st.form_submit_button("Save password", type="primary")
+            with auth_screen.container():
+                st.title("Investment Copilot")
+                st.caption("Private investment workspace · administrator-provisioned accounts")
+                st.subheader("Set your password")
+                st.warning("Your administrator issued a temporary password. Choose a new password to continue.")
+                with st.form("required_password_change"):
+                    password_1 = st.text_input("New password", type="password")
+                    password_2 = st.text_input("Confirm new password", type="password")
+                    submit = st.form_submit_button("Save password", type="primary")
             if submit:
                 if password_1 != password_2:
                     st.error("The passwords do not match.")
@@ -399,22 +394,30 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                     except ValueError as exc:
                         st.error(str(exc))
             return None
+
+        with auth_screen.container():
+            st.title("Investment Copilot")
+            st.caption("Private investment workspace · administrator-provisioned accounts")
         return current
 
     # Do not trust an old user ID kept in Streamlit session state by itself.
     st.session_state.pop("auth_user_id", None)
     st.session_state.pop("auth_session_token", None)
 
-    with st.form("login_form"):
-        username = st.text_input("Username", autocomplete="username")
-        password = st.text_input("Password", type="password", autocomplete="current-password")
-        stay_signed_in = st.checkbox(
-            "Stay signed in on this device (30 days)",
-            value=False,
-            key="login_stay_signed_in",
-            help="If unchecked, the cookie lasts for this browser session and the server-side sign-in expires after 12 hours.",
-        )
-        submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+    with auth_screen.container():
+        st.title("Investment Copilot")
+        st.caption("Private investment workspace · administrator-provisioned accounts")
+        with st.form("login_form"):
+            username = st.text_input("Username", autocomplete="username")
+            password = st.text_input("Password", type="password", autocomplete="current-password")
+            stay_signed_in = st.checkbox(
+                "Stay signed in on this device (30 days)",
+                value=False,
+                key="login_stay_signed_in",
+                help="If unchecked, the cookie lasts for this browser session and the server-side sign-in expires after 12 hours.",
+            )
+            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+        st.caption("Accounts are created by an administrator. Self-registration is disabled.")
 
     if submitted:
         user = authenticate(username, password)
@@ -426,14 +429,28 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 revoke_auth_session(token)
                 st.error("Could not establish the browser session. Please refresh and try again.")
             else:
-                # Complete login in this Streamlit session immediately.
-                # The browser cookie is used to restore login after refresh.
+                # Continue into the app in this run instead of showing the old
+                # login form while a second full portfolio run is starting.
                 st.session_state["auth_session_token"] = token
                 st.session_state["auth_user_id"] = user["user_id"]
-                st.rerun()
+                auth_screen.empty()
+                if user["must_change_password"]:
+                    with auth_screen.container():
+                        st.title("Investment Copilot")
+                        st.caption("Private investment workspace · administrator-provisioned accounts")
+                        st.subheader("Set your password")
+                        st.warning("Your administrator issued a temporary password. Choose a new password to continue.")
+                        with st.form("required_password_change"):
+                            password_1 = st.text_input("New password", type="password")
+                            password_2 = st.text_input("Confirm new password", type="password")
+                            submit = st.form_submit_button("Save password", type="primary")
+                    return None
+                with auth_screen.container():
+                    st.title("Investment Copilot")
+                    st.caption("Private investment workspace · administrator-provisioned accounts")
+                return user
         else:
             st.error("Sign-in failed. Check your credentials or contact the administrator.")
-    st.caption("Accounts are created by an administrator. Self-registration is disabled.")
     return None
 
 
