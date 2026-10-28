@@ -6,3 +6,4 @@ yfinance>=0.2.54
 python-dotenv>=1.0
 requests>=2.32
 psycopg[binary,pool]>=3.2,<4
+extra-streamlit-components>=0.1.81,<0.2

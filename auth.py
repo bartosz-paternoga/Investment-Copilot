@@ -9,11 +9,15 @@ import secrets
 import uuid
 from typing import Any
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 from database import database_url, get_postgres_pool
 
 _ITERATIONS = 310_000
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,40}$")
+_SESSION_COOKIE_NAME = "investment_copilot_session"
+_SHORT_SESSION_HOURS = 12
+_REMEMBER_SESSION_DAYS = 30
 
 
 def _setting(name: str, default: str = "") -> str:
@@ -69,6 +73,14 @@ def initialize_auth_db() -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         con.execute("CREATE INDEX IF NOT EXISTS idx_auth_users_active ON app_private.auth_users(active, username)")
+        con.execute("""CREATE TABLE IF NOT EXISTS app_private.auth_sessions (
+            token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES app_private.auth_users(user_id) ON DELETE CASCADE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            revoked_at TIMESTAMPTZ
+        )""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON app_private.auth_sessions(user_id, expires_at)")
 
 
 def ensure_bootstrap_admin() -> str | None:
@@ -117,6 +129,105 @@ def load_active_user(user_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def _session_token_hash(token: str) -> str:
+    """Store only a digest of the random browser session token."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_auth_session(user_id: str, stay_signed_in: bool) -> tuple[str, datetime]:
+    """Create a random browser token and store only its hash in PostgreSQL."""
+    token = secrets.token_urlsafe(32)
+    duration = (
+        timedelta(days=_REMEMBER_SESSION_DAYS)
+        if stay_signed_in
+        else timedelta(hours=_SHORT_SESSION_HOURS)
+    )
+    expires_at = datetime.now(timezone.utc) + duration
+    with _connect() as con:
+        con.execute(
+            "DELETE FROM app_private.auth_sessions "
+            "WHERE expires_at <= CURRENT_TIMESTAMP OR revoked_at IS NOT NULL"
+        )
+        con.execute(
+            """INSERT INTO app_private.auth_sessions (token_hash,user_id,expires_at)
+               VALUES (%s,%s,%s)""",
+            (_session_token_hash(token), user_id, expires_at),
+        )
+    return token, expires_at
+
+
+def load_auth_session(token: str) -> dict[str, Any] | None:
+    """Validate a browser token against an unexpired, non-revoked active account."""
+    if not token or len(token) > 256:
+        return None
+    with _connect() as con:
+        row = con.execute(
+            """SELECT u.*
+               FROM app_private.auth_sessions s
+               JOIN app_private.auth_users u ON u.user_id=s.user_id
+               WHERE s.token_hash=%s
+                 AND s.expires_at > CURRENT_TIMESTAMP
+                 AND s.revoked_at IS NULL
+                 AND u.active=TRUE""",
+            (_session_token_hash(token),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def revoke_auth_session(token: str | None) -> None:
+    """Invalidate one browser token on the server."""
+    if not token:
+        return
+    with _connect() as con:
+        con.execute(
+            "UPDATE app_private.auth_sessions SET revoked_at=CURRENT_TIMESTAMP "
+            "WHERE token_hash=%s AND revoked_at IS NULL",
+            (_session_token_hash(token),),
+        )
+
+
+def _request_session_cookie(st) -> str | None:
+    """Read the cookie sent with the current browser request."""
+    try:
+        return st.context.cookies.get(_SESSION_COOKIE_NAME)
+    except Exception:
+        return None
+
+
+def _cookie_manager(st):
+    """Initialize the browser cookie component once per Streamlit session."""
+    manager = st.session_state.get("_auth_cookie_manager")
+    if manager is None:
+        import extra_streamlit_components as stx
+
+        manager = stx.CookieManager(key="auth_cookie_manager")
+        st.session_state["_auth_cookie_manager"] = manager
+    return manager
+
+
+def _set_auth_cookie(st, token: str, expires_at: datetime) -> None:
+    manager = _cookie_manager(st)
+    manager.set(
+        _SESSION_COOKIE_NAME,
+        token,
+        key="set_auth_session_cookie",
+        path="/",
+        expires_at=expires_at,
+        secure=True,
+        same_site="strict",
+    )
+
+
+def _delete_auth_cookie(st, key: str) -> bool:
+    try:
+        manager = _cookie_manager(st)
+        manager.delete(_SESSION_COOKIE_NAME, key=f"{key}_delete")
+        return True
+    except Exception:
+        # Server-side revocation still prevents a stale cookie from authenticating.
+        return False
+
+
 def set_password(user_id: str, password: str) -> None:
     if not _valid_password(password):
         raise ValueError("Password must be between 12 and 256 characters.")
@@ -125,6 +236,11 @@ def set_password(user_id: str, password: str) -> None:
         con.execute("""UPDATE app_private.auth_users SET password_salt=%s,password_hash=%s,
             must_change_password=FALSE,updated_at=CURRENT_TIMESTAMP WHERE user_id=%s AND active=TRUE""",
             (salt, digest, user_id))
+        con.execute(
+            "UPDATE app_private.auth_sessions SET revoked_at=CURRENT_TIMESTAMP "
+            "WHERE user_id=%s AND revoked_at IS NULL",
+            (user_id,),
+        )
 
 
 def create_user(username: str, display_name: str, email: str = "") -> tuple[dict[str, Any], str]:
@@ -168,6 +284,11 @@ def reset_user_password(user_id: str) -> str:
             (salt, digest, user_id))
         if cur.rowcount != 1:
             raise ValueError("Account not found.")
+        con.execute(
+            "UPDATE app_private.auth_sessions SET revoked_at=CURRENT_TIMESTAMP "
+            "WHERE user_id=%s AND revoked_at IS NULL",
+            (user_id,),
+        )
     return temp_password
 
 
@@ -183,12 +304,23 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
             if admins <= 1:
                 raise ValueError("The last active administrator cannot be deactivated.")
         con.execute("UPDATE app_private.auth_users SET active=%s,updated_at=CURRENT_TIMESTAMP WHERE user_id=%s", (bool(active), user_id))
+        if not active:
+            con.execute(
+                "UPDATE app_private.auth_sessions SET revoked_at=CURRENT_TIMESTAMP "
+                "WHERE user_id=%s AND revoked_at IS NULL",
+                (user_id,),
+            )
 
 
 def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
     st.title("Investment Copilot")
     st.caption("Private investment workspace · administrator-provisioned accounts")
+    try:
+        _cookie_manager(st)
+    except Exception:
+        st.error("Browser session support could not be initialized. Please reload and try again.")
+        return None
     # Bootstrap/schema setup is needed once per Streamlit browser session, not
     # on every page rerun. Keep retrying only if configuration is still invalid.
     if not st.session_state.get("_bootstrap_checked", False):
@@ -199,42 +331,71 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 st.session_state["_bootstrap_checked"] = True
         else:
             st.session_state["_bootstrap_checked"] = True
-    session_user_id = st.session_state.get("auth_user_id")
-    if session_user_id:
-        current = load_active_user(session_user_id)
-        if current:
-            if current["must_change_password"]:
-                st.subheader("Set your password")
-                st.warning("Your administrator issued a temporary password. Choose a new password to continue.")
-                with st.form("required_password_change"):
-                    password_1 = st.text_input("New password", type="password")
-                    password_2 = st.text_input("Confirm new password", type="password")
-                    submit = st.form_submit_button("Save password", type="primary")
-                if submit:
-                    if password_1 != password_2:
-                        st.error("The passwords do not match.")
-                    else:
-                        try:
-                            set_password(current["user_id"], password_1)
-                            st.success("Password updated. Sign in with your new password.")
-                            st.session_state.pop("auth_user_id", None)
-                            st.rerun()
-                        except ValueError as exc:
-                            st.error(str(exc))
-                return None
-            return current
-        st.session_state.pop("auth_user_id", None)
+    # Prefer the token already validated in this Streamlit session. On a
+    # browser refresh, restore it from the cookie sent with the new request.
+    skip_cookie_once = st.session_state.pop("_auth_skip_cookie_once", False)
+    session_token = st.session_state.get("auth_session_token")
+    if not session_token and not skip_cookie_once:
+        session_token = _request_session_cookie(st)
+
+    current = load_auth_session(session_token) if session_token else None
+    if current and session_token:
+        st.session_state["auth_session_token"] = session_token
+        st.session_state["auth_user_id"] = current["user_id"]
+
+        if current["must_change_password"]:
+            st.subheader("Set your password")
+            st.warning("Your administrator issued a temporary password. Choose a new password to continue.")
+            with st.form("required_password_change"):
+                password_1 = st.text_input("New password", type="password")
+                password_2 = st.text_input("Confirm new password", type="password")
+                submit = st.form_submit_button("Save password", type="primary")
+            if submit:
+                if password_1 != password_2:
+                    st.error("The passwords do not match.")
+                else:
+                    try:
+                        set_password(current["user_id"], password_1)
+                        _delete_auth_cookie(st, "auth_cookie_password_changed")
+                        st.session_state.pop("auth_user_id", None)
+                        st.session_state.pop("auth_session_token", None)
+                        st.session_state["_auth_skip_cookie_once"] = True
+                        st.success("Password updated. Please sign in again with your new password.")
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+            return None
+        return current
+
+    # Do not trust an old user ID kept in Streamlit session state by itself.
+    st.session_state.pop("auth_user_id", None)
+    st.session_state.pop("auth_session_token", None)
 
     with st.form("login_form"):
         username = st.text_input("Username", autocomplete="username")
         password = st.text_input("Password", type="password", autocomplete="current-password")
+        stay_signed_in = st.checkbox(
+            "Stay signed in on this device (30 days)",
+            value=False,
+            key="login_stay_signed_in",
+        )
         submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+
     if submitted:
         user = authenticate(username, password)
         if user:
-            st.session_state["auth_user_id"] = user["user_id"]
-            st.rerun()
-        st.error("Sign-in failed. Check your credentials or contact the administrator.")
+            token, expires_at = create_auth_session(user["user_id"], stay_signed_in)
+            try:
+                _set_auth_cookie(st, token, expires_at)
+            except Exception:
+                revoke_auth_session(token)
+                st.error("Could not establish the browser session. Please refresh and try again.")
+            else:
+                st.session_state["auth_session_token"] = token
+                st.session_state["auth_user_id"] = user["user_id"]
+                st.info("Signing you in…")
+        else:
+            st.error("Sign-in failed. Check your credentials or contact the administrator.")
     st.caption("Accounts are created by an administrator. Self-registration is disabled.")
     return None
 
@@ -245,8 +406,14 @@ def render_account_sidebar(st, user: dict[str, Any]) -> None:
         st.markdown("---")
         st.caption(f"Signed in as **{user['display_name']}** · {user['role']}")
         if st.button("Sign out", use_container_width=True, key="sign_out"):
+            token = st.session_state.get("auth_session_token") or _request_session_cookie(st)
+            revoke_auth_session(token)
+            _delete_auth_cookie(st, "auth_cookie_logout")
             st.session_state.pop("auth_user_id", None)
+            st.session_state.pop("auth_session_token", None)
             st.session_state.pop("created_user_credentials", None)
+            # Avoid restoring the cookie from the current request during logout.
+            st.session_state["_auth_skip_cookie_once"] = True
             st.rerun()
         if user["role"] != "admin":
             return
