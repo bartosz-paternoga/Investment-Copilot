@@ -187,7 +187,7 @@ def revoke_auth_session(token: str | None) -> None:
         )
 
 
-def _request_session_cookie(st) -> str | None:
+def _request_session_cookie(st, *, browser_result_only: bool = False) -> str | None:
     """Read the session token from the request or the browser cookie component."""
     try:
         # Streamlit's request snapshot is available in the supported versions.
@@ -197,6 +197,14 @@ def _request_session_cookie(st) -> str | None:
     token = request_cookies.get(_SESSION_COOKIE_NAME) if request_cookies is not None else None
     if token:
         return str(token)
+
+    # A completed CookieManager call is already stored under its Streamlit key.
+    # Read that result directly on the follow-up run instead of mounting the
+    # browser component again beside the login form.
+    if browser_result_only:
+        cookies = st.session_state.get("auth_cookie_manager")
+        token = cookies.get(_SESSION_COOKIE_NAME) if isinstance(cookies, dict) else None
+        return str(token) if token else None
 
     # Streamlit Community Cloud may filter cookies from the initial request.
     # Read from the browser component whenever the request has no session token.
@@ -208,36 +216,45 @@ def _request_session_cookie(st) -> str | None:
 
 def _cookie_manager(st):
     """Return the cookie component for the current script run."""
-    manager = st.session_state.get("_auth_cookie_manager")
-    if manager is None:
-        import extra_streamlit_components as stx
+    import extra_streamlit_components as stx
 
-        manager = stx.CookieManager(key="auth_cookie_manager")
-        st.session_state["_auth_cookie_manager"] = manager
-    return manager
+    return stx.CookieManager(key="auth_cookie_manager")
 
 
 def _set_auth_cookie(
     st, token: str, expires_at: datetime, stay_signed_in: bool
 ) -> None:
     """Set a cookie with the same lifetime as its server-side session."""
-    manager = _cookie_manager(st)
+    from extra_streamlit_components.CookieManager import _component_func
 
-    # Use one CookieManager.set() path for both sign-in choices. The server-side
-    # expiry is 12 hours when unchecked and 30 days when checked.
-    manager.set(
-        _SESSION_COOKIE_NAME,
-        token,
+    # Call only the write operation here. CookieManager's constructor also
+    # mounts a read component; mounting both during form submission can queue
+    # extra browser-driven reruns as the user signs in.
+    _component_func(
+        method="set",
+        cookie=_SESSION_COOKIE_NAME,
+        value=token,
+        options={
+            "path": "/",
+            "expires": expires_at.isoformat(),
+            "secure": True,
+            "sameSite": "lax",
+        },
         key="set_auth_session_cookie",
-        path="/",
-        expires_at=expires_at,
-        secure=True,
-        same_site="lax",
+        default=False,
     )
+
+
 def _delete_auth_cookie(st, key: str) -> bool:
     try:
-        manager = _cookie_manager(st)
-        manager.delete(_SESSION_COOKIE_NAME, key=f"{key}_delete")
+        from extra_streamlit_components.CookieManager import _component_func
+
+        _component_func(
+            method="delete",
+            cookie=_SESSION_COOKIE_NAME,
+            key=f"{key}_delete",
+            default=False,
+        )
         return True
     except Exception:
         # Server-side revocation still prevents a stale cookie from authenticating.
@@ -333,8 +350,6 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     auth_screen = st.empty()
     if not st.session_state.get("_bootstrap_checked", False) and show_transition is not None:
         show_transition("Checking your sign-in information…")
-    # Recreate the component only if this run needs to read or change a cookie.
-    st.session_state.pop("_auth_cookie_manager", None)
     # Bootstrap/schema setup is needed once per Streamlit browser session, not
     # on every page rerun. Keep retrying only if configuration is still invalid.
     if not st.session_state.get("_bootstrap_checked", False):
@@ -352,7 +367,9 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     session_token = st.session_state.get("auth_session_token")
     cookie_probe_complete = st.session_state.get("_auth_cookie_probe_complete", False)
     if not session_token and not skip_cookie_once and not cookie_probe_complete:
-        session_token = _request_session_cookie(st)
+        session_token = _request_session_cookie(
+            st, browser_result_only=cookie_probe_pending
+        )
         if not session_token and not cookie_probe_pending and show_transition is not None:
             # Render the login form underneath a short cover while the browser
             # component returns a saved cookie. If it never responds (for
