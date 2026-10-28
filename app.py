@@ -100,7 +100,7 @@ if _auth_transition_overlay_visible:
 
 def _render_cookie_probe_timeout() -> None:
     """Clear the saved-cookie cover quickly if the browser component stalls."""
-    @st.fragment(run_every=0.1)
+    @st.fragment(run_every=0.25)
     def cookie_probe_timeout():
         if not st.session_state.get("_auth_cookie_probe_pending", False):
             return

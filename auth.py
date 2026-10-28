@@ -232,7 +232,7 @@ def _set_auth_cookie(
         path="/",
         expires_at=expires_at,
         secure=True,
-        same_site="strict",
+        same_site="lax",
     )
 def _delete_auth_cookie(st, key: str) -> bool:
     try:
@@ -355,7 +355,7 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             # component returns a saved cookie. If it never responds (for
             # example, in a private window), a short app-side timeout reveals login.
             st.session_state["_auth_cookie_probe_pending"] = True
-            st.session_state["_auth_cookie_probe_deadline"] = time.monotonic() + 0.5
+            st.session_state["_auth_cookie_probe_deadline"] = time.monotonic() + 1.5
             show_transition("Investment Copilot")
         elif session_token and cookie_probe_pending and show_transition is not None:
             # A saved cookie arrived on the follow-up component rerun. Keep the
