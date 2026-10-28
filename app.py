@@ -83,7 +83,7 @@ def _show_auth_transition_overlay() -> None:
         </style>
         <div id="auth-transition-overlay" role="status" aria-live="polite">
             <div id="auth-transition-spinner"></div>
-            <div>Signing in and opening your portfolio…</div>
+            <div>Opening your portfolio…</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -192,7 +192,8 @@ if database_url():
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
     if _current_user is None:
-        _clear_auth_transition_overlay()
+        if not st.session_state.get("_auth_cookie_probe_pending", False):
+            _clear_auth_transition_overlay()
         st.stop()
     set_active_tenant_schema(_current_user["tenant_schema"])
     initialize_db()
