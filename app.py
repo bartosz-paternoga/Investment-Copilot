@@ -1285,7 +1285,7 @@ elif page == "ETF Research":
 
     st.divider()
     st.subheader("Sourced ETF constituent data & overlap")
-    st.write("Portfolio X-Ray automatically retrieves public holdings for supported Amundi, iShares, Vanguard and Xtrackers funds. Use this importer for other funds or when you want to provide a specific dated issuer snapshot. The app never invents constituents or classifications.")
+    st.write("Portfolio X-Ray automatically retrieves public holdings from Amundi, iShares, Vanguard, Xtrackers and State Street for supported funds. Single-asset products such as physical gold and Bitcoin are classified separately. Use this importer for other funds or for a dated issuer snapshot. The app does not invent company constituents.")
     template = "fund_ticker,constituent_ticker,weight_pct,constituent_name,sector,country,region\n".encode("utf-8")
     st.download_button("Download CSV template", template, "etf_constituents_template.csv", "text/csv")
     st.caption("The required columns are fund_ticker, constituent_ticker and weight_pct. Add sector, country and region when your source provides them; the app leaves missing classifications unknown.")
@@ -1524,7 +1524,7 @@ elif page == "Holdings & risk":
 elif page == "Portfolio X-Ray":
     st.title("Portfolio X-Ray — underlying exposures")
     st.markdown('<div class="terminal-tag">LOOK THROUGH YOUR FUNDS · FIND HIDDEN CONCENTRATION</div>', unsafe_allow_html=True)
-    st.write("See the companies and classifications inside your ETFs. The app loads public issuer holdings for supported funds and combines them using your current portfolio values.")
+    st.write("See the companies and classifications inside your equity ETFs. Issuer holdings are combined using current portfolio values; single-asset products such as gold and Bitcoin ETPs are shown separately.")
 
     xray_tickers = sorted(
         portfolio.loc[portfolio["market_value_base"].notna(), "ticker"].dropna().astype(str).str.strip().str.upper().unique()
@@ -1552,7 +1552,10 @@ elif page == "Portfolio X-Ray":
             return True
         # Preserve user-imported files. Auto-refresh only snapshots previously
         # fetched by the issuer connector.
-        if not current["source_name"].fillna("").astype(str).str.contains("issuer holdings", case=False).any():
+        is_automatic = current["source_name"].fillna("").astype(str).str.contains(
+            r"issuer (?:holdings|exposure)", case=False, regex=True
+        )
+        if not is_automatic.any():
             return False
         imported_at = pd.to_datetime(current["imported_at"], errors="coerce", utc=True).max()
         if pd.isna(imported_at):
@@ -1565,7 +1568,7 @@ elif page == "Portfolio X-Ray":
         help="Refresh automatically sourced holdings. Your manually imported snapshots are kept as they are.",
         key="xray_refresh_issuer_holdings",
     )
-    sync_token = (user_key, tuple(xray_tickers), date.today().isoformat())
+    sync_token = ("issuer-source-v2", user_key, tuple(xray_tickers), date.today().isoformat())
     already_attempted = st.session_state.get("_xray_issuer_sync_token") == sync_token
     if force_xray_refresh or (missing_or_old and not already_attempted):
         if force_xray_refresh:
@@ -1576,8 +1579,12 @@ elif page == "Portfolio X-Ray":
                 if not force_xray_refresh and fund not in missing_or_old:
                     continue
                 current = existing_by_fund.get(fund)
-                if force_xray_refresh and current is not None and not current.empty and not current["source_name"].fillna("").astype(str).str.contains("issuer holdings", case=False).any():
-                    continue
+                if force_xray_refresh and current is not None and not current.empty:
+                    is_automatic = current["source_name"].fillna("").astype(str).str.contains(
+                        r"issuer (?:holdings|exposure)", case=False, regex=True
+                    )
+                    if not is_automatic.any():
+                        continue
                 try:
                     snapshot = _cached_issuer_holdings(fund, instrument_isins.get(fund, ""))
                     to_save = snapshot["holdings"].drop(columns=["_source_date"], errors="ignore")
@@ -1630,8 +1637,8 @@ elif page == "Portfolio X-Ray":
             st.warning("No held position matched a valid constituent snapshot. Review the fund symbols and snapshot weights in ETF Research.")
         st.caption("Partial snapshots contribute only their reported weights; they are not expanded to 100%. Totals slightly above 100% are scaled down to 100%; snapshots above 110% are excluded. Company overlap uses normalized company names to align provider naming differences; separate share classes may be combined when their names identify the same company.")
 
-        company_tab, sector_tab, country_tab, region_tab, coverage_tab = st.tabs(
-            ["Companies", "Sectors", "Countries", "Regions", "Data coverage"]
+        company_tab, sector_tab, country_tab, region_tab, assets_tab, coverage_tab = st.tabs(
+            ["Companies", "Sectors", "Countries", "Regions", "Other assets", "Data coverage"]
         )
         with company_tab:
             if companies.empty:
@@ -1709,6 +1716,23 @@ elif page == "Portfolio X-Ray":
             render_xray_dimension(xray["countries"], "Country", "portfolio_xray_countries.csv")
         with region_tab:
             render_xray_dimension(xray["regions"], "Region", "portfolio_xray_regions.csv")
+        with assets_tab:
+            assets = xray["assets"]
+            if assets.empty:
+                st.info("No single-asset products, such as physical gold or Bitcoin ETPs, are in the priced portfolio.")
+            else:
+                asset_view = assets.rename(columns={
+                    "Underlying asset": "Underlying asset",
+                    "exposure_value": f"Value ({base_ccy})",
+                    "portfolio_weight_pct": "Portfolio weight %",
+                    "held_through": "Held through",
+                })
+                european_dataframe(asset_view, use_container_width=True, hide_index=True, column_config={
+                    f"Value ({base_ccy})": st.column_config.NumberColumn(format="%.2f"),
+                    "Portfolio weight %": st.column_config.NumberColumn(format="%.2f%%"),
+                })
+                st.caption("These products track one non-company asset. They count toward portfolio coverage but are kept out of company, sector and country overlap totals.")
+                st.download_button("Download other asset exposures CSV", asset_view.to_csv(index=False).encode("utf-8"), "portfolio_xray_other_assets.csv", "text/csv")
         with coverage_tab:
             st.caption("Coverage is shown for each priced position. Only constituent rows matched to funds you currently hold are included.")
             european_dataframe(xray["coverage"], use_container_width=True, hide_index=True, column_config={

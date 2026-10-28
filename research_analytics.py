@@ -56,9 +56,11 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
     """
     company_columns = ["constituent_ticker", "constituent_name", "exposure_value", "portfolio_weight_pct", "etf_count", "held_through"]
     category_columns = ["category", "exposure_value", "portfolio_weight_pct", "constituents", "etfs"]
+    asset_columns = ["Underlying asset", "exposure_value", "portfolio_weight_pct", "held_through"]
     coverage_columns = ["Fund", "Position value", "Snapshot weight %", "Look-through value", "As of", "Source", "Coverage"]
     empty = {
         "companies": pd.DataFrame(columns=company_columns),
+        "assets": pd.DataFrame(columns=asset_columns),
         "sectors": pd.DataFrame(columns=category_columns),
         "countries": pd.DataFrame(columns=category_columns),
         "regions": pd.DataFrame(columns=category_columns),
@@ -144,6 +146,7 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
                               "Source": ", ".join(sources) or "—", "Coverage": coverage_label})
         fund_rows["effective_weight_pct"] = fund_rows["weight_pct"].clip(lower=0) * scale
         fund_rows["exposure_value"] = position_value * fund_rows["effective_weight_pct"] / 100.0
+        fund_rows["is_other_asset"] = fund_rows["source_name"].str.contains("issuer exposure", case=False, na=False)
         for row in fund_rows.itertuples(index=False):
             if not row.constituent_ticker or row.exposure_value <= 0:
                 continue
@@ -155,59 +158,80 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
                 "region": row.region,
                 "fund_ticker": fund,
                 "exposure_value": float(row.exposure_value),
+                "is_other_asset": bool(row.is_other_asset),
             })
 
     companies = pd.DataFrame(exposure_rows)
     if companies.empty:
         company_summary = pd.DataFrame(columns=company_columns)
+        asset_summary = pd.DataFrame(columns=asset_columns)
         sector_summary = pd.DataFrame(columns=category_columns)
         country_summary = pd.DataFrame(columns=category_columns)
         region_summary = pd.DataFrame(columns=category_columns)
     else:
-        companies["_company_key"] = companies.apply(
-            lambda row: _company_identity(row["constituent_name"], row["constituent_ticker"]), axis=1
-        )
-        company_summary = companies.groupby("_company_key", as_index=False).agg(
-            constituent_ticker=("constituent_ticker", lambda values: ", ".join(sorted(set(v for v in values if v)))),
-            constituent_name=("constituent_name", lambda values: next((v for v in values if v), "")),
-            exposure_value=("exposure_value", "sum"),
-            etf_count=("fund_ticker", "nunique"),
-            held_through=("fund_ticker", lambda values: ", ".join(sorted(set(values)))),
-        )
-        company_summary["portfolio_weight_pct"] = company_summary["exposure_value"] / portfolio_value * 100.0
-        company_summary = company_summary[company_columns].sort_values("exposure_value", ascending=False, ignore_index=True)
-
-        def summarize_category(column: str) -> pd.DataFrame:
-            categorized = companies[companies[column].str.strip() != ""].copy()
-            if categorized.empty:
-                return pd.DataFrame(columns=category_columns)
-            if column == "country":
-                categorized[column] = categorized[column].map(
-                    lambda value: _COUNTRY_NAMES.get(str(value).strip().upper(), str(value).strip())
-                )
-            elif column == "region":
-                categorized[column] = categorized.apply(
-                    lambda row: row[column].strip() or _region_for_country(row["country"]),
-                    axis=1,
-                )
-            categorized["_category_key"] = categorized[column].str.casefold()
-            summary = categorized.groupby("_category_key", as_index=False).agg(
-                category=(column, lambda values: next((v for v in values if v), "")),
+        asset_rows = companies[companies["is_other_asset"]].copy()
+        if asset_rows.empty:
+            asset_summary = pd.DataFrame(columns=asset_columns)
+        else:
+            asset_summary = asset_rows.groupby("constituent_name", as_index=False).agg(
                 exposure_value=("exposure_value", "sum"),
-                constituents=("_company_key", "nunique"),
-                etfs=("fund_ticker", "nunique"),
-            )
-            summary["portfolio_weight_pct"] = summary["exposure_value"] / portfolio_value * 100.0
-            return summary[category_columns].sort_values("exposure_value", ascending=False, ignore_index=True)
+                held_through=("fund_ticker", lambda values: ", ".join(sorted(set(values)))),
+            ).rename(columns={"constituent_name": "Underlying asset"})
+            asset_summary["portfolio_weight_pct"] = asset_summary["exposure_value"] / portfolio_value * 100.0
+            asset_summary = asset_summary[asset_columns].sort_values("exposure_value", ascending=False, ignore_index=True)
 
-        sector_summary = summarize_category("sector")
-        country_summary = summarize_category("country")
-        region_summary = summarize_category("region")
+        company_rows = companies[~companies["is_other_asset"]].copy()
+        if company_rows.empty:
+            company_summary = pd.DataFrame(columns=company_columns)
+            sector_summary = pd.DataFrame(columns=category_columns)
+            country_summary = pd.DataFrame(columns=category_columns)
+            region_summary = pd.DataFrame(columns=category_columns)
+        else:
+            company_rows["_company_key"] = company_rows.apply(
+                lambda row: _company_identity(row["constituent_name"], row["constituent_ticker"]), axis=1
+            )
+            company_summary = company_rows.groupby("_company_key", as_index=False).agg(
+                constituent_ticker=("constituent_ticker", lambda values: ", ".join(sorted(set(v for v in values if v)))),
+                constituent_name=("constituent_name", lambda values: next((v for v in values if v), "")),
+                exposure_value=("exposure_value", "sum"),
+                etf_count=("fund_ticker", "nunique"),
+                held_through=("fund_ticker", lambda values: ", ".join(sorted(set(values)))),
+            )
+            company_summary["portfolio_weight_pct"] = company_summary["exposure_value"] / portfolio_value * 100.0
+            company_summary = company_summary[company_columns].sort_values("exposure_value", ascending=False, ignore_index=True)
+
+            def summarize_category(column: str) -> pd.DataFrame:
+                categorized = company_rows[company_rows[column].str.strip() != ""].copy()
+                if categorized.empty:
+                    return pd.DataFrame(columns=category_columns)
+                if column == "country":
+                    categorized[column] = categorized[column].map(
+                        lambda value: _COUNTRY_NAMES.get(str(value).strip().upper(), str(value).strip())
+                    )
+                elif column == "region":
+                    categorized[column] = categorized.apply(
+                        lambda row: row[column].strip() or _region_for_country(row["country"]),
+                        axis=1,
+                    )
+                categorized["_category_key"] = categorized[column].str.casefold()
+                summary = categorized.groupby("_category_key", as_index=False).agg(
+                    category=(column, lambda values: next((v for v in values if v), "")),
+                    exposure_value=("exposure_value", "sum"),
+                    constituents=("_company_key", "nunique"),
+                    etfs=("fund_ticker", "nunique"),
+                )
+                summary["portfolio_weight_pct"] = summary["exposure_value"] / portfolio_value * 100.0
+                return summary[category_columns].sort_values("exposure_value", ascending=False, ignore_index=True)
+
+            sector_summary = summarize_category("sector")
+            country_summary = summarize_category("country")
+            region_summary = summarize_category("region")
 
     coverage = pd.DataFrame(coverage_rows, columns=coverage_columns)
     coverage_pct = covered_value / portfolio_value * 100.0 if portfolio_value > 0 else 0.0
     return {
         "companies": company_summary,
+        "assets": asset_summary,
         "sectors": sector_summary,
         "countries": country_summary,
         "regions": region_summary,
