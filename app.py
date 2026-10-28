@@ -37,6 +37,54 @@ except OSError:
     APP_VERSION = "dev"
 st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
+_auth_transition_overlay = st.empty()
+_auth_transition_overlay_visible = bool(
+    st.session_state.get("_auth_transition_loading", False)
+)
+
+
+def _clear_auth_transition_overlay() -> None:
+    if _auth_transition_overlay_visible:
+        _auth_transition_overlay.empty()
+    st.session_state["_auth_transition_loading"] = False
+
+
+if _auth_transition_overlay_visible:
+    _auth_transition_overlay.markdown(
+        """
+        <style>
+        #auth-transition-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 2147483647;
+            display: grid;
+            place-content: center;
+            justify-items: center;
+            gap: 14px;
+            background: #f4f6f8;
+            color: #475569;
+            font: 600 16px/1.4 sans-serif;
+        }
+        #auth-transition-spinner {
+            width: 34px;
+            height: 34px;
+            border: 3px solid #d9e2eb;
+            border-top-color: #64748b;
+            border-radius: 50%;
+            animation: auth-transition-spin .8s linear infinite;
+        }
+        @keyframes auth-transition-spin {
+            to { transform: rotate(360deg); }
+        }
+        </style>
+        <div id="auth-transition-overlay" role="status" aria-live="polite">
+            <div id="auth-transition-spinner"></div>
+            <div>Signing in and opening your portfolio…</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # A restrained steel/slate palette keeps charts consistent with the neutral UI.
 px.defaults.color_discrete_sequence = ["#475569", "#94a3b8", "#cbd5e1", "#334155", "#64748b", "#e2e8f0", "#7c8798", "#b0bac7"]
 
@@ -132,9 +180,11 @@ if database_url():
     try:
         _current_user = render_auth_gate(st)
     except Exception:
+        _clear_auth_transition_overlay()
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
     if _current_user is None:
+        _clear_auth_transition_overlay()
         st.stop()
     set_active_tenant_schema(_current_user["tenant_schema"])
     initialize_db()
@@ -217,6 +267,7 @@ if not quotes.empty and "fetched_at" in quotes.columns:
         quote_fetch_label = fetched_values.max().strftime("%Y-%m-%d %H:%M:%S UTC")
 portfolio = build_portfolio(transactions, quotes, base_ccy, analytics=analytics)
 metrics = portfolio_metrics(portfolio, base_ccy)
+_clear_auth_transition_overlay()
 
 
 def money(value, currency=base_ccy, signed=False):
