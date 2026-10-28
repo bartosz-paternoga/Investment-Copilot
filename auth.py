@@ -344,22 +344,10 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             st.session_state["_bootstrap_checked"] = True
     # Prefer the token already validated in this Streamlit session. On a
     # browser refresh, restore it from the cookie sent with the new request.
-    cookie_probe_pending = st.session_state.pop("_auth_cookie_probe_pending", False)
     skip_cookie_once = st.session_state.pop("_auth_skip_cookie_once", False)
     session_token = st.session_state.get("auth_session_token")
     if not session_token and not skip_cookie_once:
         session_token = _request_session_cookie(st)
-        if (
-            not session_token
-            and not cookie_probe_pending
-            and show_transition is not None
-        ):
-            # Give the browser component one rerun to return cookies before
-            # showing the login form. The app-level cover hides stale UI meanwhile.
-            st.session_state["_auth_cookie_probe_pending"] = True
-            st.session_state["_auth_transition_loading"] = True
-            show_transition()
-            return None
 
     current = load_auth_session(session_token) if session_token else None
     if current and session_token:

@@ -194,11 +194,13 @@ if database_url():
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
     if _current_user is None:
-        if not st.session_state.get("_auth_cookie_probe_pending", False):
-            _clear_auth_transition_overlay()
+        _clear_auth_transition_overlay()
         st.stop()
     set_active_tenant_schema(_current_user["tenant_schema"])
     initialize_db()
+    # Do not keep the full-screen login transition over slower market-data
+    # refreshes or portfolio calculations after authentication has succeeded.
+    _clear_auth_transition_overlay()
 elif os.getenv("ETF_APP_LOCAL_DEV_MODE", "").strip().lower() in {"1", "true", "yes"}:
     st.markdown('<div class="dev-mode-notice"><strong>Local development mode</strong><span>Authentication is bypassed and data is stored in local SQLite. This mode is for testing on your own computer only.</span></div>', unsafe_allow_html=True)
     set_active_tenant_schema(None)
@@ -403,7 +405,6 @@ for currency in set(portfolio.get("currency", pd.Series(dtype=str)).fillna("").a
         market_data_status_tickers.add(info["ticker"])
 market_data_status = quotes[quotes["ticker"].isin(market_data_status_tickers)] if "ticker" in quotes else pd.DataFrame()
 metrics = portfolio_metrics(portfolio, base_ccy)
-_clear_auth_transition_overlay()
 
 
 def european_number(value, decimals=2, suffix="", signed=False):
@@ -438,6 +439,10 @@ def european_dataframe(data, *args, **kwargs):
             type_config = column_config.get("type_config", {}) if isinstance(column_config, dict) else {}
             old_format = str(type_config.get("format") or "")
             normalized_name = column_name.casefold().strip()
+            amount_column = (
+                normalized_name in {"amount", "cash", "fee", "unit price"}
+                or normalized_name.startswith(("value (", "cost (", "p/l (", "market value"))
+            )
             percentage_column = "%%" in old_format or "%" in column_name
             integer_column = (
                 (pd.api.types.is_integer_dtype(data[column].dtype) and not percentage_column)
@@ -455,8 +460,12 @@ def european_dataframe(data, *args, **kwargs):
                 clean_config = dict(column_config)
                 clean_type_config = dict(type_config)
                 clean_type_config.pop("format", None)
+                if amount_column:
+                    clean_type_config["width"] = "medium"
                 clean_config["type_config"] = clean_type_config
                 display_config[column_name] = clean_config
+            elif amount_column:
+                display_config[column_name] = st.column_config.NumberColumn(width="medium")
         if formatters:
             data = data.style.format(formatters, na_rep="—")
     kwargs["column_config"] = display_config
@@ -506,7 +515,7 @@ def display_position_table(data: pd.DataFrame):
     if data.empty:
         st.info("There are no open ETF positions yet. Record an OPENING position or BUY transaction in Transactions.")
         return
-    columns = ["ticker", "name", "quantity", "currency", "price", "day_change_pct", "price_timing", "fx_to_base", "fx_timing", "market_value_local", "market_value_base", "weight_pct", "cost_basis_base", "unrealized_pl_base", "unrealized_pl_pct", "status"]
+    columns = ["ticker", "name", "quantity", "currency", "price", "day_change_pct", "fx_to_base", "market_value_local", "market_value_base", "weight_pct", "cost_basis_base", "unrealized_pl_base", "unrealized_pl_pct", "status", "price_timing", "fx_timing"]
     view = data[[c for c in columns if c in data.columns]].copy()
     view = view.rename(columns={
         "ticker":"Ticker", "name":"Instrument", "quantity":"Units", "currency":"Currency",
@@ -526,11 +535,12 @@ def display_position_table(data: pd.DataFrame):
         "Price date / time": st.column_config.TextColumn(width="medium", help=f"Exchange price date and quote fetch time in {display_timezone}."),
         f"FX → {base_ccy}": st.column_config.NumberColumn(format="%.5f", width="small"),
         "FX date / time": st.column_config.TextColumn(width="medium", help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
-        f"Value ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width="small"),
+        "Value (CCY)": st.column_config.NumberColumn(format="%.2f", width="medium"),
+        f"Value ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width="medium"),
         "Weight %": st.column_config.NumberColumn(format="%.2f%%", width="small"),
         "P/L %": st.column_config.NumberColumn(format="%+.2f%%", width="small"),
-        f"Cost ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width="small"),
-        f"P/L ({base_ccy})": st.column_config.NumberColumn(format="%+.2f", width="small"),
+        f"Cost ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width="medium"),
+        f"P/L ({base_ccy})": st.column_config.NumberColumn(format="%+.2f", width="medium"),
         "Status": st.column_config.TextColumn(width="small"),
     }, row_height=34)
 
@@ -552,7 +562,7 @@ if page == "Overview":
         if not metrics["realized_pl_complete"]:
             st.warning("Realized P/L is incomplete because at least one sale could not be matched to a known book cost and valid historical FX rate.")
         display_position_table(portfolio)
-        status_cols = [c for c in ["ticker","currency","price","day_change_pct","price_timing","status","error"] if c in market_data_status.columns]
+        status_cols = [c for c in ["ticker","currency","price","day_change_pct","status","error","price_timing"] if c in market_data_status.columns]
         if len(market_data_status) and "status" in market_data_status.columns and (market_data_status["status"] != "OK").any():
             st.warning("Some quotes are incomplete. Do not treat missing or stale prices as zero; inspect the quote status below.")
             status_view = market_data_status[status_cols].rename(columns={
@@ -604,14 +614,15 @@ if page == "Overview":
                 fx_info = current_fx_info(currency)
                 rate = fx_info.get("rate") if fx_info else None
                 fx_timing = fx_timing_label(fx_info or {})
-                cash_rows.append({"Currency":currency,"Cash":balance,"FX rate":rate,"FX date / time":fx_timing,
-                                  f"Value ({base_ccy})":balance * rate if rate is not None else np.nan})
+                cash_rows.append({"Currency":currency,"Cash":balance,"FX rate":rate,
+                                  f"Value ({base_ccy})":balance * rate if rate is not None else np.nan,
+                                  "FX date / time":fx_timing})
             european_dataframe(pd.DataFrame(cash_rows), use_container_width=True, hide_index=True, row_height=34, column_config={
                 "Currency":st.column_config.TextColumn(width="small"),
-                "Cash":st.column_config.NumberColumn(format="%.2f", width="small"),
+                "Cash":st.column_config.NumberColumn(format="%.2f", width="medium"),
                 "FX rate":st.column_config.NumberColumn(format="%.5f", width="small"),
                 "FX date / time":st.column_config.TextColumn(width="medium", help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
-                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width="small"),
+                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width="medium"),
             })
             if any(row["Cash"] < -1e-8 for row in cash_rows):
                 st.warning("One or more cash balances are negative. This commonly means buys/sells were recorded without matching cash-in/cash-out events, or the cash ledger is incomplete.")
@@ -710,7 +721,7 @@ elif page == "Investments":
     else:
         view = portfolio.copy()
         # Friendly compact labels, preserving the underlying full-precision values.
-        columns = ["ticker", "name", "quantity", "currency", "price", "day_change_pct", "price_timing", "fx_to_base", "fx_timing", "market_value_base", "unrealized_pl_base", "unrealized_pl_pct", "weight_pct", "status"]
+        columns = ["ticker", "name", "quantity", "currency", "price", "day_change_pct", "fx_to_base", "market_value_base", "unrealized_pl_base", "unrealized_pl_pct", "weight_pct", "status", "price_timing", "fx_timing"]
         view = view[[c for c in columns if c in view.columns]].rename(columns={
             "ticker":"Ticker", "name":"Instrument", "quantity":"Units", "currency":"Currency", "price":"Price",
             "price_timing":"Price date / time", "fx_to_base":f"FX → {base_ccy}", "fx_timing":"FX date / time",
@@ -747,9 +758,9 @@ elif page == "Investments":
                 "Price date / time":st.column_config.TextColumn(width="medium", help=f"Exchange price date and quote fetch time in {display_timezone}."),
                 f"FX → {base_ccy}":st.column_config.NumberColumn(format="%.5f", width="small"),
                 "FX date / time":st.column_config.TextColumn(width="medium", help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
-                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width="small"),
+                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width="medium"),
                 "Price change %":st.column_config.NumberColumn(format="%+.2f%%", width="small", help="Today's instrument price move in its listing currency; daily portfolio P/L also includes the FX move."),
-                f"P/L ({base_ccy})":st.column_config.NumberColumn(format="%+.2f", width="small"),
+                f"P/L ({base_ccy})":st.column_config.NumberColumn(format="%+.2f", width="medium"),
                 "Return %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
                 "Weight %":st.column_config.NumberColumn(format="%.2f%%", width="small"),
                 "Status":st.column_config.TextColumn(width="small"),
@@ -961,8 +972,8 @@ elif page == "Transactions":
             "Units":st.column_config.NumberColumn(width="small", format="%.0f"),
             "Unit price":st.column_config.NumberColumn(width="small", format="%.4f"),
             "Currency":st.column_config.TextColumn(width="small"),
-            "Amount":st.column_config.NumberColumn(width="small", format="%.2f"),
-            "Fee":st.column_config.NumberColumn(width="small", format="%.2f"),
+            "Amount":st.column_config.NumberColumn(width="medium", format="%.2f"),
+            "Fee":st.column_config.NumberColumn(width="medium", format="%.2f"),
             "Notes":st.column_config.TextColumn(width="medium"),
         })
         st.download_button("Download ledger CSV", transactions.to_csv(index=False).encode("utf-8"), "etf_transactions.csv", "text/csv")
@@ -1285,7 +1296,7 @@ elif page == "Watchlist":
         watch_view = watch.merge(watch_quotes, on="ticker", how="left")
         st.subheader(f"Your instruments · {len(watch_view)}")
         watch_view.insert(0, "order", range(1, len(watch_view) + 1))
-        watch_table = watch_view[[c for c in ["order", "ticker", "name", "currency", "price", "day_change_pct", "price_timing", "status", "note"] if c in watch_view.columns]].rename(columns={
+        watch_table = watch_view[[c for c in ["order", "ticker", "name", "currency", "price", "day_change_pct", "status", "note", "price_timing"] if c in watch_view.columns]].rename(columns={
             "order":"Order", "ticker":"Symbol", "name":"Name", "currency":"Currency", "price":"Price", "day_change_pct":"Price change %",
             "price_timing":"Price date / time", "status":"Status", "note":"Note",
         })
@@ -1420,7 +1431,7 @@ elif page == "Market analysis":
                              "Price change %":pd.to_numeric(quote.get("day_change_pct"), errors="coerce") if quote is not None else np.nan,
                              "Period change %":(s.iloc[-1]/s.iloc[0]-1)*100,
                              "Volatility %":r.std()*np.sqrt(252)*100,
-                             "Latest / fetched":market_timing_label(str(s.index[-1])[:10], local_market_time(history_fetch_times.get(symbol, "")))})
+                             "Price date / time":market_timing_label(str(s.index[-1])[:10], local_market_time(history_fetch_times.get(symbol, "")))})
         european_dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, row_height=34, column_config={
             "Symbol":st.column_config.TextColumn(width="small"),
             "Currency":st.column_config.TextColumn(width="small"),
@@ -1428,7 +1439,7 @@ elif page == "Market analysis":
             "Price change %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
             "Period change %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
             "Volatility %":st.column_config.NumberColumn(format="%.2f%%", width="small"),
-            "Latest / fetched":st.column_config.TextColumn(width="medium", help=f"Latest daily observation date, then history cache fetch time in {display_timezone}."),
+            "Price date / time":st.column_config.TextColumn(width="medium", help=f"Latest daily observation date, then history cache fetch time in {display_timezone}."),
         })
     st.subheader("Market moves that may affect ETF portfolios")
     st.markdown("**Rates:** changing yield expectations can affect bond prices and equity valuations. **FX:** a weaker foreign currency can reduce unhedged foreign-asset returns in PLN. **Equities:** broad index moves affect funds according to their underlying holdings and tracking. **Commodities:** the futures symbol may not match spot prices or a fund's return because of roll costs.")
