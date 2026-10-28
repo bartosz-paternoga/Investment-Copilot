@@ -374,10 +374,13 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             st, browser_result_only=cookie_probe_pending
         )
         if not session_token and not cookie_probe_pending:
-            # Start the browser-cookie lookup, but render the login form in this
-            # same run. A slow or missing component response must never leave a
-            # new browser session on a blank page.
+            # Keep the login form covered while the browser component returns.
+            # The app-side timeout reveals it if the component never responds.
             st.session_state["_auth_cookie_probe_pending"] = True
+            st.session_state["_auth_cookie_probe_deadline"] = time.monotonic() + 1.5
+            if show_transition is not None:
+                show_transition("Investment Copilot")
+            return None
         elif not session_token and cookie_probe_pending:
             # The component response arrived without a saved token. Stop probing
             # so the login form stays stable while credentials are entered.
