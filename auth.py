@@ -409,6 +409,11 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     if transition_user is None:
         st.session_state.pop("_auth_login_transition", None)
     current = transition_user or (load_auth_session(session_token) if session_token else None)
+    if session_token and not current:
+        # A stale cookie is still a completed probe. Do not mount the reader
+        # again beside the login form, where its response can interrupt submit.
+        st.session_state["_auth_cookie_probe_complete"] = True
+        st.session_state.pop("_auth_cookie_probe_pending", None)
     if current and session_token:
         st.session_state["auth_session_token"] = session_token
         st.session_state["auth_user_id"] = current["user_id"]

@@ -49,7 +49,7 @@ st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈"
 # A failed cookie-probe fragment can leave its transient flags in an existing
 # browser session after a code update. Reset only those flags once so the new
 # app run can show the login form or restore the browser cookie normally.
-_AUTH_FLOW_VERSION = "cookie-probe-stable-form-5"
+_AUTH_FLOW_VERSION = "cookie-probe-stable-form-6"
 if st.session_state.get("_auth_flow_version") != _AUTH_FLOW_VERSION:
     for _auth_state_key in (
         "_auth_cookie_probe_pending",
