@@ -130,7 +130,7 @@ def _direct_snapshot(
     """Convert a direct issuer download into the app's saved snapshot format."""
     name_col = _pick_column(frame, ("name", "holding_name", "security_name"))
     ticker_col = _pick_column(frame, ("ticker", "symbol"))
-    weight_col = _pick_column(frame, ("weight", "weight_pct", "weight_percent", "weight_%"))
+    weight_col = _pick_column(frame, ("weight", "weight_pct", "weight_percent", "weight_%", "percent_of_fund"))
     type_col = _pick_column(frame, ("type", "asset_class"))
     if name_col is None or weight_col is None:
         raise ValueError("the issuer download did not contain recognizable name and weight columns")
@@ -153,8 +153,8 @@ def _direct_snapshot(
         pd.to_numeric(weight_values, errors="coerce").abs().max() > 1
     )
     rows["weight"] = frame[weight_col].map(lambda value: _parse_weight_fraction(value, percentage_points))
-    sector_col = _pick_column(frame, ("sector",))
-    country_col = _pick_column(frame, ("country", "country_name", "country_code", "location"))
+    sector_col = _pick_column(frame, ("sector", "sector_classification"))
+    country_col = _pick_column(frame, ("country", "country_name", "country_code", "trade_country_name", "location"))
     region_col = _pick_column(frame, ("region",))
     rows["sector"] = frame[sector_col].map(_source_text) if sector_col else ""
     rows["country"] = frame[country_col].map(_source_text) if country_col else ""
@@ -225,7 +225,9 @@ def _fetch_ssga_spyl(fund: str, isin: str) -> dict[str, Any]:
     header_index = None
     for index, cells in enumerate(data[:40]):
         normalized = {re.sub(r"[^a-z0-9]", "", str(cell or "").lower()) for cell in cells}
-        if "weight" in normalized and ("name" in normalized or "securityname" in normalized):
+        has_weight = any("weight" in value or value in {"percentoffund", "percentofnetassets"} for value in normalized)
+        has_security_name = any(value == "name" or "securityname" in value or value == "holdingname" for value in normalized)
+        if has_weight and has_security_name:
             header_index = index
             break
     if header_index is None:
