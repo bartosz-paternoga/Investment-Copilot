@@ -1366,59 +1366,6 @@ elif page == "Watchlist":
     st.markdown('<div class="terminal-tag">TRACK GLOBAL MARKETS · FX · CRYPTO · BONDS · COMMODITIES · FUNDS</div>', unsafe_allow_html=True)
     st.write("Watch almost any market instrument supported by Yahoo Finance, whether or not you own it. Use a provider symbol for the instrument; prices, currencies and availability depend on the data source.")
 
-    # Curated Yahoo Finance symbols make non-equity instruments discoverable without
-    # changing the existing ticker-keyed database or quote/history pipeline.
-    watchlist_presets = {
-        "FX · EUR/PLN spot (EURPLN=X)": ("EURPLN=X", "FX · EUR/PLN exchange rate"),
-        "FX · EUR/USD spot (EURUSD=X)": ("EURUSD=X", "FX · EUR/USD exchange rate"),
-        "FX · GBP/USD spot (GBPUSD=X)": ("GBPUSD=X", "FX · GBP/USD exchange rate"),
-        "FX · USD/JPY spot (JPY=X)": ("JPY=X", "FX · USD/JPY exchange rate"),
-        "Crypto · Bitcoin (BTC-USD)": ("BTC-USD", "Crypto · Bitcoin in USD"),
-        "Crypto · Ethereum (ETH-USD)": ("ETH-USD", "Crypto · Ethereum in USD"),
-        "Commodity · Gold futures (GC=F)": ("GC=F", "Commodity · Gold futures"),
-        "Commodity · Silver futures (SI=F)": ("SI=F", "Commodity · Silver futures"),
-        "Commodity · WTI crude oil futures (CL=F)": ("CL=F", "Commodity · WTI crude oil futures"),
-        "Commodity · Natural gas futures (NG=F)": ("NG=F", "Commodity · Natural gas futures"),
-        "Commodity · Copper futures (HG=F)": ("HG=F", "Commodity · Copper futures"),
-        "Rates · US 10-year Treasury yield (^TNX)": ("^TNX", "Rates · US 10-year Treasury yield index, not bond price"),
-        "Bonds · US 10-year Treasury note futures (ZN=F)": ("ZN=F", "Bonds · US 10-year Treasury note futures"),
-        "Bonds · US 20+ year Treasury ETF (TLT)": ("TLT", "Bond ETF · Long-duration US Treasuries"),
-        "Bonds · US 7–10 year Treasury ETF (IEF)": ("IEF", "Bond ETF · Intermediate US Treasuries"),
-        "Index · S&P 500 (^GSPC)": ("^GSPC", "Index · S&P 500"),
-        "Index · Nasdaq Composite (^IXIC)": ("^IXIC", "Index · Nasdaq Composite"),
-        "Index · Euro Stoxx 50 (^STOXX50E)": ("^STOXX50E", "Index · Euro Stoxx 50"),
-        "Volatility · VIX (^VIX)": ("^VIX", "Volatility · CBOE VIX index"),
-    }
-    quick_col, quick_button_col = st.columns([3, 1])
-    with quick_col:
-        preset_label = st.selectbox("Quick-add a popular instrument", list(watchlist_presets), key="watchlist_preset")
-    with quick_button_col:
-        st.write("")
-        st.write("")
-        if st.button("Add preset", type="primary", use_container_width=True):
-            preset_symbol, preset_note = watchlist_presets[preset_label]
-            try:
-                add_watchlist_ticker(preset_symbol, preset_note)
-                st.success(f"Added {preset_symbol} to your watchlist.")
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-
-    with st.expander("Add any other instrument by market symbol", expanded=True):
-        st.caption("Examples: EURPLN=X, EURUSD=X, BTC-USD, ETH-USD, GC=F (gold futures), ^TNX (US 10-year yield), ZN=F (10-year Treasury futures), TLT, CSPX.L. FX pairs commonly use =X, futures often use =F, and indices often begin with ^ on Yahoo Finance.")
-        with st.form("watchlist_add_form"):
-            w1, w2 = st.columns([1, 2])
-            watch_ticker = w1.text_input("Market symbol", placeholder="EURPLN=X or BTC-USD").strip().upper()
-            watch_note = w2.text_input("Description / note (optional)", placeholder="FX pair, commodity, bond, index…")
-            watch_add = st.form_submit_button("Add instrument", type="primary")
-            if watch_add:
-                try:
-                    add_watchlist_ticker(watch_ticker, watch_note)
-                    st.success(f"Added {watch_ticker} to watchlist.")
-                    st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
-
     watch = list_watchlist()
     if not watch.empty:
         watch_quotes = add_quote_timing_columns(get_quotes(watch["ticker"].tolist()))
@@ -1474,6 +1421,59 @@ elif page == "Watchlist":
             st.rerun()
     else:
         st.info("Your watchlist is empty. Add an FX pair, cryptocurrency, bond/rate instrument, commodity, index, ETF or stock using the quick-add menu or a provider symbol.")
+
+    # Curated Yahoo Finance symbols make non-equity instruments discoverable without
+    # changing the existing ticker-keyed database or quote/history pipeline.
+    watchlist_presets = {
+        "FX · EUR/PLN spot (EURPLN=X)": ("EURPLN=X", "FX · EUR/PLN exchange rate"),
+        "FX · EUR/USD spot (EURUSD=X)": ("EURUSD=X", "FX · EUR/USD exchange rate"),
+        "FX · GBP/USD spot (GBPUSD=X)": ("GBPUSD=X", "FX · GBP/USD exchange rate"),
+        "FX · USD/JPY spot (JPY=X)": ("JPY=X", "FX · USD/JPY exchange rate"),
+        "Crypto · Bitcoin (BTC-USD)": ("BTC-USD", "Crypto · Bitcoin in USD"),
+        "Crypto · Ethereum (ETH-USD)": ("ETH-USD", "Crypto · Ethereum in USD"),
+        "Commodity · Gold futures (GC=F)": ("GC=F", "Commodity · Gold futures"),
+        "Commodity · Silver futures (SI=F)": ("SI=F", "Commodity · Silver futures"),
+        "Commodity · WTI crude oil futures (CL=F)": ("CL=F", "Commodity · WTI crude oil futures"),
+        "Commodity · Natural gas futures (NG=F)": ("NG=F", "Commodity · Natural gas futures"),
+        "Commodity · Copper futures (HG=F)": ("HG=F", "Commodity · Copper futures"),
+        "Rates · US 10-year Treasury yield (^TNX)": ("^TNX", "Rates · US 10-year Treasury yield index, not bond price"),
+        "Bonds · US 10-year Treasury note futures (ZN=F)": ("ZN=F", "Bonds · US 10-year Treasury note futures"),
+        "Bonds · US 20+ year Treasury ETF (TLT)": ("TLT", "Bond ETF · Long-duration US Treasuries"),
+        "Bonds · US 7–10 year Treasury ETF (IEF)": ("IEF", "Bond ETF · Intermediate US Treasuries"),
+        "Index · S&P 500 (^GSPC)": ("^GSPC", "Index · S&P 500"),
+        "Index · Nasdaq Composite (^IXIC)": ("^IXIC", "Index · Nasdaq Composite"),
+        "Index · Euro Stoxx 50 (^STOXX50E)": ("^STOXX50E", "Index · Euro Stoxx 50"),
+        "Volatility · VIX (^VIX)": ("^VIX", "Volatility · CBOE VIX index"),
+    }
+    quick_col, quick_button_col = st.columns([3, 1])
+    with quick_col:
+        preset_label = st.selectbox("Quick-add a popular instrument", list(watchlist_presets), key="watchlist_preset")
+    with quick_button_col:
+        st.write("")
+        st.write("")
+        if st.button("Add preset", type="primary", use_container_width=True):
+            preset_symbol, preset_note = watchlist_presets[preset_label]
+            try:
+                add_watchlist_ticker(preset_symbol, preset_note)
+                st.success(f"Added {preset_symbol} to your watchlist.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+    with st.expander("Add any other instrument by market symbol", expanded=True):
+        st.caption("Examples: EURPLN=X, EURUSD=X, BTC-USD, ETH-USD, GC=F (gold futures), ^TNX (US 10-year yield), ZN=F (10-year Treasury futures), TLT, CSPX.L. FX pairs commonly use =X, futures often use =F, and indices often begin with ^ on Yahoo Finance.")
+        with st.form("watchlist_add_form"):
+            w1, w2 = st.columns([1, 2])
+            watch_ticker = w1.text_input("Market symbol", placeholder="EURPLN=X or BTC-USD").strip().upper()
+            watch_note = w2.text_input("Description / note (optional)", placeholder="FX pair, commodity, bond, index…")
+            watch_add = st.form_submit_button("Add instrument", type="primary")
+            if watch_add:
+                try:
+                    add_watchlist_ticker(watch_ticker, watch_note)
+                    st.success(f"Added {watch_ticker} to watchlist.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
 
 elif page == "Holdings & risk":
     st.title("Holdings & risk")
