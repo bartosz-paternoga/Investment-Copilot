@@ -344,6 +344,11 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
 
 def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
+    def mark_sign_in_submitted() -> None:
+        # app.py uses this flag to cover the previous screen before the new run
+        # starts doing database work.
+        st.session_state["_auth_transition_loading"] = True
+
     auth_screen = st.empty()
     # Recreate the component only if this run needs to read or change a cookie.
     st.session_state.pop("_auth_cookie_manager", None)
@@ -416,10 +421,16 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 key="login_stay_signed_in",
                 help="If unchecked, the cookie lasts for this browser session and the server-side sign-in expires after 12 hours.",
             )
-            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+            submitted = st.form_submit_button(
+                "Sign in",
+                type="primary",
+                use_container_width=True,
+                on_click=mark_sign_in_submitted,
+            )
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
 
     if submitted:
+        st.session_state["_auth_transition_loading"] = True
         user = authenticate(username, password)
         if user:
             token, expires_at = create_auth_session(user["user_id"], stay_signed_in)
@@ -427,6 +438,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 _set_auth_cookie(st, token, expires_at, stay_signed_in)
             except Exception:
                 revoke_auth_session(token)
+                st.session_state["_auth_transition_loading"] = False
                 st.error("Could not establish the browser session. Please refresh and try again.")
             else:
                 # Continue into the app in this run instead of showing the old
@@ -435,6 +447,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 st.session_state["auth_user_id"] = user["user_id"]
                 auth_screen.empty()
                 if user["must_change_password"]:
+                    st.session_state["_auth_transition_loading"] = False
                     with auth_screen.container():
                         st.title("Investment Copilot")
                         st.caption("Private investment workspace · administrator-provisioned accounts")
@@ -450,6 +463,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                     st.caption("Private investment workspace · administrator-provisioned accounts")
                 return user
         else:
+            st.session_state["_auth_transition_loading"] = False
             st.error("Sign-in failed. Check your credentials or contact the administrator.")
     return None
 
