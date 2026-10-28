@@ -342,13 +342,8 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
             )
 
 
-def render_auth_gate(st) -> dict[str, Any] | None:
+def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
-    def mark_sign_in_submitted() -> None:
-        # app.py uses this flag to cover the previous screen before the new run
-        # starts doing database work.
-        st.session_state["_auth_transition_loading"] = True
-
     auth_screen = st.empty()
     # Recreate the component only if this run needs to read or change a cookie.
     st.session_state.pop("_auth_cookie_manager", None)
@@ -412,6 +407,43 @@ def render_auth_gate(st) -> dict[str, Any] | None:
     with auth_screen.container():
         st.title("Investment Copilot")
         st.caption("Private investment workspace · administrator-provisioned accounts")
+        st.markdown(
+            """
+            <style>
+            #auth-submit-overlay {
+                display: none;
+                position: fixed;
+                inset: 0;
+                z-index: 2147483646;
+                place-content: center;
+                justify-items: center;
+                gap: 14px;
+                background: #f4f6f8;
+                color: #475569;
+                font: 600 16px/1.4 sans-serif;
+            }
+            body:has(.st-key-login_form button:disabled) #auth-submit-overlay {
+                display: grid;
+            }
+            #auth-submit-spinner {
+                width: 34px;
+                height: 34px;
+                border: 3px solid #d9e2eb;
+                border-top-color: #64748b;
+                border-radius: 50%;
+                animation: auth-submit-spin .8s linear infinite;
+            }
+            @keyframes auth-submit-spin {
+                to { transform: rotate(360deg); }
+            }
+            </style>
+            <div id="auth-submit-overlay" role="status" aria-live="polite">
+                <div id="auth-submit-spinner"></div>
+                <div>Signing in and opening your portfolio…</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         with st.form("login_form"):
             username = st.text_input("Username", autocomplete="username")
             password = st.text_input("Password", type="password", autocomplete="current-password")
@@ -421,16 +453,13 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 key="login_stay_signed_in",
                 help="If unchecked, the cookie lasts for this browser session and the server-side sign-in expires after 12 hours.",
             )
-            submitted = st.form_submit_button(
-                "Sign in",
-                type="primary",
-                use_container_width=True,
-                on_click=mark_sign_in_submitted,
-            )
+            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
 
     if submitted:
         st.session_state["_auth_transition_loading"] = True
+        if show_transition is not None:
+            show_transition()
         user = authenticate(username, password)
         if user:
             token, expires_at = create_auth_session(user["user_id"], stay_signed_in)
