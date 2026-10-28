@@ -50,17 +50,18 @@ _auth_transition_overlay_visible = bool(
 
 def _clear_auth_transition_overlay() -> None:
     global _auth_transition_overlay_visible
-    if _auth_transition_overlay_visible:
-        _auth_transition_overlay.empty()
+    _auth_transition_overlay.empty()
     _auth_transition_overlay_visible = False
     st.session_state["_auth_transition_loading"] = False
 
 
-def _show_auth_transition_overlay() -> None:
+def _show_auth_transition_overlay(message="Opening your portfolio…", auto_hide_after_ms=None) -> None:
     global _auth_transition_overlay_visible
     _auth_transition_overlay_visible = True
-    _auth_transition_overlay.markdown(
-        """
+    animation = ""
+    if auto_hide_after_ms is not None:
+        animation = f"animation: auth-transition-fade-out 180ms ease {max(0, int(auto_hide_after_ms))}ms forwards;"
+    markup = """
         <style>
         #auth-transition-overlay {
             position: fixed;
@@ -73,6 +74,7 @@ def _show_auth_transition_overlay() -> None:
             background: #f4f6f8;
             color: #475569;
             font: 600 16px/1.4 sans-serif;
+            __OVERLAY_ANIMATION__
         }
         #auth-transition-spinner {
             width: 34px;
@@ -85,14 +87,17 @@ def _show_auth_transition_overlay() -> None:
         @keyframes auth-transition-spin {
             to { transform: rotate(360deg); }
         }
+        @keyframes auth-transition-fade-out {
+            to { opacity: 0; visibility: hidden; pointer-events: none; }
+        }
         </style>
         <div id="auth-transition-overlay" role="status" aria-live="polite">
             <div id="auth-transition-spinner"></div>
-            <div>Opening your portfolio…</div>
+            <div>__OVERLAY_MESSAGE__</div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        """
+    markup = markup.replace("__OVERLAY_ANIMATION__", animation).replace("__OVERLAY_MESSAGE__", message)
+    _auth_transition_overlay.markdown(markup, unsafe_allow_html=True)
 
 
 if _auth_transition_overlay_visible:
@@ -197,7 +202,8 @@ if database_url():
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
     if _current_user is None:
-        _clear_auth_transition_overlay()
+        if not st.session_state.get("_auth_cookie_probe_pending", False):
+            _clear_auth_transition_overlay()
         st.stop()
     set_active_tenant_schema(_current_user["tenant_schema"])
     initialize_db()

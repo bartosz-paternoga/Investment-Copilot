@@ -344,10 +344,21 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             st.session_state["_bootstrap_checked"] = True
     # Prefer the token already validated in this Streamlit session. On a
     # browser refresh, restore it from the cookie sent with the new request.
+    cookie_probe_pending = st.session_state.pop("_auth_cookie_probe_pending", False)
     skip_cookie_once = st.session_state.pop("_auth_skip_cookie_once", False)
     session_token = st.session_state.get("auth_session_token")
     if not session_token and not skip_cookie_once:
         session_token = _request_session_cookie(st)
+        if not session_token and not cookie_probe_pending and show_transition is not None:
+            # Render the login form underneath a short cover while the browser
+            # component returns a saved cookie. If it never responds (for
+            # example, in a private window), the cover fades and login remains usable.
+            st.session_state["_auth_cookie_probe_pending"] = True
+            show_transition("Checking your saved sign-in…", auto_hide_after_ms=1200)
+        elif session_token and cookie_probe_pending and show_transition is not None:
+            # A saved cookie arrived on the follow-up component rerun. Keep the
+            # login form covered while validating it and opening the workspace.
+            show_transition("Checking your saved sign-in…")
 
     current = load_auth_session(session_token) if session_token else None
     if current and session_token:
