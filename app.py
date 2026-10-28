@@ -45,6 +45,21 @@ try:
 except OSError:
     APP_VERSION = "dev"
 st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+
+# A failed cookie-probe fragment can leave its transient flags in an existing
+# browser session after a code update. Reset only those flags once so the new
+# app run can show the login form or restore the browser cookie normally.
+_AUTH_FLOW_VERSION = "cookie-probe-fragment-fix-2"
+if st.session_state.get("_auth_flow_version") != _AUTH_FLOW_VERSION:
+    for _auth_state_key in (
+        "_auth_cookie_probe_pending",
+        "_auth_cookie_probe_deadline",
+        "_auth_cookie_probe_complete",
+        "_auth_transition_loading",
+    ):
+        st.session_state.pop(_auth_state_key, None)
+    st.session_state["_auth_flow_version"] = _AUTH_FLOW_VERSION
+
 LOGGER = logging.getLogger("investment_copilot")
 LOGGER.info("Application modules loaded (version %s).", APP_VERSION)
 
