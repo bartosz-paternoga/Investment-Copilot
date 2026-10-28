@@ -1568,7 +1568,7 @@ elif page == "Portfolio X-Ray":
         help="Refresh automatically sourced holdings. Your manually imported snapshots are kept as they are.",
         key="xray_refresh_issuer_holdings",
     )
-    sync_token = ("issuer-source-v2", user_key, tuple(xray_tickers), date.today().isoformat())
+    sync_token = ("issuer-source-v3", user_key, tuple(xray_tickers), date.today().isoformat())
     already_attempted = st.session_state.get("_xray_issuer_sync_token") == sync_token
     if force_xray_refresh or (missing_or_old and not already_attempted):
         if force_xray_refresh:
