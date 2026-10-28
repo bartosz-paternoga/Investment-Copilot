@@ -331,6 +331,8 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
 def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
     auth_screen = st.empty()
+    if not st.session_state.get("_bootstrap_checked", False) and show_transition is not None:
+        show_transition("Checking your sign-in information…")
     # Recreate the component only if this run needs to read or change a cookie.
     st.session_state.pop("_auth_cookie_manager", None)
     # Bootstrap/schema setup is needed once per Streamlit browser session, not
@@ -364,9 +366,9 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
         elif not session_token and cookie_probe_pending:
             # The browser component has had its chance to return a saved cookie.
             # Remove it before rendering the form so a late mobile response cannot
-            # trigger a rerun while credentials are being entered.
+            # trigger a rerun while credentials are being entered. This component
+            # response already caused a rerun, so render the form in this run.
             st.session_state["_auth_cookie_probe_complete"] = True
-            st.rerun()
         elif session_token and cookie_probe_pending and show_transition is not None:
             # A saved cookie arrived on the follow-up component rerun. Keep the
             # login form covered while validating it and opening the workspace.
