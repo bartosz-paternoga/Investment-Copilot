@@ -44,12 +44,16 @@ _auth_transition_overlay_visible = bool(
 
 
 def _clear_auth_transition_overlay() -> None:
+    global _auth_transition_overlay_visible
     if _auth_transition_overlay_visible:
         _auth_transition_overlay.empty()
+    _auth_transition_overlay_visible = False
     st.session_state["_auth_transition_loading"] = False
 
 
-if _auth_transition_overlay_visible:
+def _show_auth_transition_overlay() -> None:
+    global _auth_transition_overlay_visible
+    _auth_transition_overlay_visible = True
     _auth_transition_overlay.markdown(
         """
         <style>
@@ -84,6 +88,10 @@ if _auth_transition_overlay_visible:
         """,
         unsafe_allow_html=True,
     )
+
+
+if _auth_transition_overlay_visible:
+    _show_auth_transition_overlay()
 
 # A restrained steel/slate palette keeps charts consistent with the neutral UI.
 px.defaults.color_discrete_sequence = ["#475569", "#94a3b8", "#cbd5e1", "#334155", "#64748b", "#e2e8f0", "#7c8798", "#b0bac7"]
@@ -178,7 +186,7 @@ hr { border-color:var(--adatch-line); }
 _current_user = None
 if database_url():
     try:
-        _current_user = render_auth_gate(st)
+        _current_user = render_auth_gate(st, show_transition=_show_auth_transition_overlay)
     except Exception:
         _clear_auth_transition_overlay()
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
