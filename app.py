@@ -198,9 +198,6 @@ if database_url():
         st.stop()
     set_active_tenant_schema(_current_user["tenant_schema"])
     initialize_db()
-    # Do not keep the full-screen login transition over slower market-data
-    # refreshes or portfolio calculations after authentication has succeeded.
-    _clear_auth_transition_overlay()
 elif os.getenv("ETF_APP_LOCAL_DEV_MODE", "").strip().lower() in {"1", "true", "yes"}:
     st.markdown('<div class="dev-mode-notice"><strong>Local development mode</strong><span>Authentication is bypassed and data is stored in local SQLite. This mode is for testing on your own computer only.</span></div>', unsafe_allow_html=True)
     set_active_tenant_schema(None)
@@ -405,6 +402,7 @@ for currency in set(portfolio.get("currency", pd.Series(dtype=str)).fillna("").a
         market_data_status_tickers.add(info["ticker"])
 market_data_status = quotes[quotes["ticker"].isin(market_data_status_tickers)] if "ticker" in quotes else pd.DataFrame()
 metrics = portfolio_metrics(portfolio, base_ccy)
+_clear_auth_transition_overlay()
 
 
 def european_number(value, decimals=2, suffix="", signed=False):

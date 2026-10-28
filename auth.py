@@ -380,9 +380,7 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                         st.error(str(exc))
             return None
 
-        with auth_screen.container():
-            st.title("Investment Copilot")
-            st.caption("Private investment workspace · administrator-provisioned accounts")
+        auth_screen.empty()
         return current
 
     # Do not trust an old user ID kept in Streamlit session state by itself.
@@ -472,9 +470,6 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                             password_2 = st.text_input("Confirm new password", type="password")
                             submit = st.form_submit_button("Save password", type="primary")
                     return None
-                with auth_screen.container():
-                    st.title("Investment Copilot")
-                    st.caption("Private investment workspace · administrator-provisioned accounts")
                 return user
         else:
             st.session_state["_auth_transition_loading"] = False
