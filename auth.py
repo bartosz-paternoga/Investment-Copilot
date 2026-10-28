@@ -187,9 +187,26 @@ def revoke_auth_session(token: str | None) -> None:
 
 
 def _request_session_cookie(st) -> str | None:
-    """Read the cookie sent with the current browser request."""
+    """Read the session token from the browser cookie manager."""
     try:
-        return st.context.cookies.get(_SESSION_COOKIE_NAME)
+        manager = _cookie_manager(st)
+        token = manager.get(_SESSION_COOKIE_NAME)
+        if token:
+            return str(token)
+
+        # Refresh the component's cookie snapshot, which can initially be empty
+        # while the browser component is loading.
+        cookies = manager.get_all()
+        token = cookies.get(_SESSION_COOKIE_NAME) if cookies else None
+        if token:
+            return str(token)
+    except Exception:
+        pass
+
+    # Fallback for cookies supplied with the initial request.
+    try:
+        token = st.context.cookies.get(_SESSION_COOKIE_NAME)
+        return str(token) if token else None
     except Exception:
         return None
 
@@ -391,8 +408,8 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 revoke_auth_session(token)
                 st.error("Could not establish the browser session. Please refresh and try again.")
             else:
-                st.session_state["auth_session_token"] = token
-                st.session_state["auth_user_id"] = user["user_id"]
+                # Wait for the browser cookie component to return the saved token.
+                # The next rerun will authenticate using that browser-returned value.
                 st.info("Signing you in…")
         else:
             st.error("Sign-in failed. Check your credentials or contact the administrator.")
