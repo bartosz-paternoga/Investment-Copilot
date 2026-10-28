@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -13,6 +14,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from database import database_url, get_postgres_pool
+
+LOGGER = logging.getLogger("investment_copilot.auth")
 
 _ITERATIONS = 310_000
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,40}$")
@@ -394,7 +397,7 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     # CookieManager reports its browser-side set result by triggering one more
     # Streamlit run. Reuse the account already verified by password auth during
     # that single handoff, then require normal server-session validation again.
-    login_transition = st.session_state.pop("_auth_login_transition", None)
+    login_transition = st.session_state.get("_auth_login_transition")
     transition_user = None
     if session_token and isinstance(login_transition, dict):
         transition_hash = str(login_transition.get("token_hash", ""))
@@ -407,6 +410,8 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             candidate = login_transition.get("user")
             if isinstance(candidate, dict):
                 transition_user = candidate
+    if transition_user is None:
+        st.session_state.pop("_auth_login_transition", None)
     current = transition_user or (load_auth_session(session_token) if session_token else None)
     if current and session_token:
         st.session_state["auth_session_token"] = session_token
@@ -503,10 +508,12 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             show_transition()
         user = authenticate(username, password)
         if user:
+            LOGGER.info("Password check accepted; creating an app session.")
             token, expires_at = create_auth_session(user["user_id"], stay_signed_in)
             try:
                 _set_auth_cookie(st, token, expires_at, stay_signed_in)
             except Exception:
+                LOGGER.exception("Could not request the browser session-cookie write.")
                 revoke_auth_session(token)
                 st.session_state["_auth_transition_loading"] = False
                 st.error("Could not establish the browser session. Please refresh and try again.")
@@ -542,6 +549,7 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                 }
                 return user
         else:
+            LOGGER.warning("Password check rejected.")
             st.session_state["_auth_transition_loading"] = False
             st.error("Sign-in failed. Check your credentials or contact the administrator.")
     return None
