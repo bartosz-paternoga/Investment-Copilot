@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import time
 from pathlib import Path
 from datetime import date
 
@@ -55,12 +56,9 @@ def _clear_auth_transition_overlay() -> None:
     st.session_state["_auth_transition_loading"] = False
 
 
-def _show_auth_transition_overlay(message="Opening your portfolio…", auto_hide_after_ms=None) -> None:
+def _show_auth_transition_overlay(message="Opening your portfolio…") -> None:
     global _auth_transition_overlay_visible
     _auth_transition_overlay_visible = True
-    animation = ""
-    if auto_hide_after_ms is not None:
-        animation = f"animation: auth-transition-fade-out 180ms ease {max(0, int(auto_hide_after_ms))}ms forwards;"
     markup = """
         <style>
         #auth-transition-overlay {
@@ -74,7 +72,6 @@ def _show_auth_transition_overlay(message="Opening your portfolio…", auto_hide
             background: #f4f6f8;
             color: #475569;
             font: 600 16px/1.4 sans-serif;
-            __OVERLAY_ANIMATION__
         }
         #auth-transition-spinner {
             width: 34px;
@@ -87,21 +84,32 @@ def _show_auth_transition_overlay(message="Opening your portfolio…", auto_hide
         @keyframes auth-transition-spin {
             to { transform: rotate(360deg); }
         }
-        @keyframes auth-transition-fade-out {
-            to { opacity: 0; visibility: hidden; pointer-events: none; }
-        }
         </style>
         <div id="auth-transition-overlay" role="status" aria-live="polite">
             <div id="auth-transition-spinner"></div>
             <div>__OVERLAY_MESSAGE__</div>
         </div>
         """
-    markup = markup.replace("__OVERLAY_ANIMATION__", animation).replace("__OVERLAY_MESSAGE__", message)
+    markup = markup.replace("__OVERLAY_MESSAGE__", message)
     _auth_transition_overlay.markdown(markup, unsafe_allow_html=True)
 
 
 if _auth_transition_overlay_visible:
     _show_auth_transition_overlay()
+
+
+def _render_cookie_probe_timeout() -> None:
+    """Clear the saved-cookie cover quickly if the browser component stalls."""
+    @st.fragment(run_every=0.1)
+    def cookie_probe_timeout():
+        if not st.session_state.get("_auth_cookie_probe_pending", False):
+            return
+        deadline = float(st.session_state.get("_auth_cookie_probe_deadline", 0.0))
+        if time.monotonic() >= deadline:
+            _clear_auth_transition_overlay()
+            st.rerun()
+
+    cookie_probe_timeout()
 
 # A restrained steel/slate palette keeps charts consistent with the neutral UI.
 px.defaults.color_discrete_sequence = ["#475569", "#94a3b8", "#cbd5e1", "#334155", "#64748b", "#e2e8f0", "#7c8798", "#b0bac7"]
@@ -202,7 +210,9 @@ if database_url():
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
     if _current_user is None:
-        if not st.session_state.get("_auth_cookie_probe_pending", False):
+        if st.session_state.get("_auth_cookie_probe_pending", False):
+            _render_cookie_probe_timeout()
+        else:
             _clear_auth_transition_overlay()
         st.stop()
     set_active_tenant_schema(_current_user["tenant_schema"])

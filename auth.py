@@ -6,6 +6,7 @@ import hmac
 import os
 import re
 import secrets
+import time
 import uuid
 from typing import Any
 from contextlib import contextmanager
@@ -352,13 +353,14 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
         if not session_token and not cookie_probe_pending and show_transition is not None:
             # Render the login form underneath a short cover while the browser
             # component returns a saved cookie. If it never responds (for
-            # example, in a private window), the cover fades and login remains usable.
+            # example, in a private window), a short app-side timeout reveals login.
             st.session_state["_auth_cookie_probe_pending"] = True
-            show_transition("Checking your saved sign-in…", auto_hide_after_ms=1200)
+            st.session_state["_auth_cookie_probe_deadline"] = time.monotonic() + 0.5
+            show_transition("Investment Copilot")
         elif session_token and cookie_probe_pending and show_transition is not None:
             # A saved cookie arrived on the follow-up component rerun. Keep the
             # login form covered while validating it and opening the workspace.
-            show_transition("Checking your saved sign-in…")
+            show_transition("Investment Copilot")
 
     current = load_auth_session(session_token) if session_token else None
     if current and session_token:
