@@ -187,18 +187,20 @@ def revoke_auth_session(token: str | None) -> None:
 
 
 def _request_session_cookie(st) -> str | None:
-    """Read the token from the cookie component rendered during this script run."""
+    """Read a token sent with the initial request, then fall back to the component."""
     try:
-        manager = _cookie_manager(st)
-        token = manager.get(_SESSION_COOKIE_NAME)
+        # Streamlit exposes cookies from the browser's initial request. Read this
+        # first so session restoration does not depend on a component roundtrip.
+        token = st.context.cookies.get(_SESSION_COOKIE_NAME)
         if token:
             return str(token)
     except Exception:
         pass
 
-    # Fallback to cookies received with the initial browser request.
+    # The component is a fallback for Streamlit versions/contexts where the
+    # initial request cookie is unavailable.
     try:
-        token = st.context.cookies.get(_SESSION_COOKIE_NAME)
+        token = _cookie_manager(st).get(_SESSION_COOKIE_NAME)
         return str(token) if token else None
     except Exception:
         return None
@@ -370,17 +372,6 @@ def render_auth_gate(st) -> dict[str, Any] | None:
     if not session_token and not skip_cookie_once:
         session_token = _request_session_cookie(st)
 
-    # Allow the browser cookie component one roundtrip before showing the login
-    # form. This avoids flashing the login screen while an existing session loads.
-    if (
-        not session_token
-        and not skip_cookie_once
-        and not st.session_state.get("_auth_cookie_probe_complete", False)
-    ):
-        st.session_state["_auth_cookie_probe_complete"] = True
-        st.info("Restoring your session…")
-        return None
-
     current = load_auth_session(session_token) if session_token else None
     if current and session_token:
         st.session_state["auth_session_token"] = session_token
@@ -421,6 +412,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
             "Stay signed in on this device (30 days)",
             value=False,
             key="login_stay_signed_in",
+            help="If unchecked, the cookie lasts for this browser session and the server-side sign-in expires after 12 hours.",
         )
         submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
 
@@ -438,7 +430,6 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 # The browser cookie is used to restore login after refresh.
                 st.session_state["auth_session_token"] = token
                 st.session_state["auth_user_id"] = user["user_id"]
-                st.session_state["_auth_cookie_probe_complete"] = True
                 st.rerun()
         else:
             st.error("Sign-in failed. Check your credentials or contact the administrator.")
