@@ -1074,10 +1074,17 @@ elif page == "Market analysis":
 elif page == "AI Analyst":
     st.title("AI portfolio analyst")
     st.write("A read-only research assistant grounded in your ledger and the latest available quote responses. AI analysis is not a substitute for verified data or professional advice.")
-    prompt = st.text_area("What would you like to investigate?", value="Review my portfolio. Identify concentration, currency and diversification risks, explain the largest exposures, and list what data is missing. Separate observations from assumptions.", height=120)
+    with st.form("ai_analyst_form"):
+        prompt = st.text_area(
+            "What would you like to investigate?",
+            value="Review my portfolio. Identify concentration, currency and diversification risks, explain the largest exposures, and list what data is missing. Separate observations from assumptions.",
+            height=120,
+            key="ai_analyst_prompt",
+        )
+        analyze_clicked = st.form_submit_button("Analyze portfolio", type="primary")
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     model = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip() or "openrouter/free"
-    if st.button("Analyze portfolio", type="primary"):
+    if analyze_clicked:
         if not api_key:
             st.error("OPENROUTER_API_KEY is empty. Add your key in .env and restart Streamlit.")
         else:
