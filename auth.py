@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import re
@@ -225,26 +226,27 @@ def _cookie_manager(st):
 
 
 def _set_auth_cookie(
-    st, token: str, expires_at: datetime, stay_signed_in: bool
+    st, token: str, expires_at: datetime
 ) -> None:
-    """Set a cookie with the same lifetime as its server-side session."""
-    from extra_streamlit_components.CookieManager import _component_func
+    """Set the browser cookie without a Streamlit component-value rerun."""
+    import streamlit.components.v1 as components
 
-    # Call only the write operation here. CookieManager's constructor also
-    # mounts a read component; mounting both during form submission can queue
-    # extra browser-driven reruns as the user signs in.
-    _component_func(
-        method="set",
-        cookie=_SESSION_COOKIE_NAME,
-        value=token,
-        options={
-            "path": "/",
-            "expires": expires_at.isoformat(),
-            "secure": True,
-            "sameSite": "lax",
-        },
-        key="set_auth_session_cookie",
-        default=False,
+    cookie_name = json.dumps(_SESSION_COOKIE_NAME)
+    cookie_value = json.dumps(token)
+    expires = json.dumps(expires_at.isoformat())
+    components.html(
+        f"""<!doctype html>
+        <script>
+        try {{
+            const name = {cookie_name};
+            const value = {cookie_value};
+            const expires = new Date({expires}).toUTCString();
+            document.cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
+                `Path=/; Expires=${{expires}}; Secure; SameSite=Lax`;
+        }} catch (error) {{}}
+        </script>""",
+        height=0,
+        scrolling=False,
     )
 
 
@@ -529,7 +531,7 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                 "deadline": time.monotonic() + 15,
             }
             try:
-                _set_auth_cookie(st, token, expires_at, stay_signed_in)
+                _set_auth_cookie(st, token, expires_at)
             except Exception:
                 LOGGER.exception("Could not request the browser session-cookie write.")
                 revoke_auth_session(token)
