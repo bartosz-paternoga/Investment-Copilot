@@ -124,10 +124,21 @@ def _initialize_schema_tables() -> None:
         )""")
         con.execute("""CREATE TABLE IF NOT EXISTS etf_holdings (
             fund_ticker TEXT NOT NULL, constituent_ticker TEXT NOT NULL, constituent_name TEXT NOT NULL DEFAULT '',
-            weight_pct REAL NOT NULL, source_name TEXT NOT NULL, source_url TEXT NOT NULL DEFAULT '',
+            weight_pct REAL NOT NULL, sector TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',
+            region TEXT NOT NULL DEFAULT '', source_name TEXT NOT NULL, source_url TEXT NOT NULL DEFAULT '',
             as_of TEXT NOT NULL, imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY(fund_ticker,constituent_ticker,as_of)
         )""")
+        if database_url():
+            etf_holdings_columns = {str(row["column_name"]) for row in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema=current_schema() AND table_name='etf_holdings'"
+            ).fetchall()}
+        else:
+            etf_holdings_columns = {str(row["name"]) for row in con.execute("PRAGMA table_info(etf_holdings)").fetchall()}
+        for column in ("sector", "country", "region"):
+            if column not in etf_holdings_columns:
+                con.execute(f"ALTER TABLE etf_holdings ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         con.execute("""CREATE TABLE IF NOT EXISTS market_data_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
             status TEXT NOT NULL, refreshed_tickers INTEGER NOT NULL DEFAULT 0,
@@ -196,7 +207,8 @@ def save_etf_holdings(
 ) -> int:
     """Persist one sourced constituent snapshot, replacing that fund/date atomically.
 
-    Expected columns: constituent_ticker, weight_pct; optional constituent_name.
+    Expected columns: constituent_ticker, weight_pct; optional constituent_name,
+    sector, country, and region classifications from the same source.
     Weights are percentage points (e.g. 7.25 means 7.25%), not decimals.
     """
     initialize_db()
@@ -222,6 +234,10 @@ def save_etf_holdings(
     if "constituent_name" not in prepared.columns:
         prepared["constituent_name"] = ""
     prepared["constituent_name"] = prepared["constituent_name"].fillna("").astype(str).str.strip().str.slice(0, 200)
+    for column in ("sector", "country", "region"):
+        if column not in prepared.columns:
+            prepared[column] = ""
+        prepared[column] = prepared[column].fillna("").astype(str).str.strip().str.slice(0, 120)
     if (prepared["constituent_ticker"].eq("").any() or prepared["constituent_ticker"].str.len().gt(80).any()
             or prepared["weight_pct"].isna().any() or (~np.isfinite(prepared["weight_pct"])).any()
             or (prepared["weight_pct"] < 0).any() or (prepared["weight_pct"] > 100).any()):
@@ -231,13 +247,14 @@ def save_etf_holdings(
     total = float(prepared["weight_pct"].sum())
     if total <= 0:
         raise ValueError("The sum of constituent weights must be greater than zero.")
-    rows = [(fund, row.constituent_ticker, row.constituent_name, float(row.weight_pct), source_name, source_url, as_of)
+    rows = [(fund, row.constituent_ticker, row.constituent_name, float(row.weight_pct),
+             row.sector, row.country, row.region, source_name, source_url, as_of)
             for row in prepared.itertuples(index=False)]
     with _connect() as con:
         con.execute("DELETE FROM etf_holdings WHERE fund_ticker=? AND as_of=?", (fund, as_of))
         con.executemany("""INSERT INTO etf_holdings
-            (fund_ticker,constituent_ticker,constituent_name,weight_pct,source_name,source_url,as_of)
-            VALUES(?,?,?,?,?,?,?)""", rows)
+            (fund_ticker,constituent_ticker,constituent_name,weight_pct,sector,country,region,source_name,source_url,as_of)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""", rows)
     return len(rows)
 
 
@@ -252,7 +269,7 @@ def list_etf_holdings(latest_only: bool = True) -> pd.DataFrame:
                 ORDER BY h.fund_ticker,h.weight_pct DESC""").fetchall()
         else:
             rows = con.execute("SELECT * FROM etf_holdings ORDER BY fund_ticker,as_of DESC,weight_pct DESC").fetchall()
-    columns = ["fund_ticker", "constituent_ticker", "constituent_name", "weight_pct", "source_name", "source_url", "as_of", "imported_at"]
+    columns = ["fund_ticker", "constituent_ticker", "constituent_name", "weight_pct", "sector", "country", "region", "source_name", "source_url", "as_of", "imported_at"]
     return pd.DataFrame([dict(r) for r in rows], columns=columns)
 
 

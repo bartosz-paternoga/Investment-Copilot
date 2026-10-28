@@ -22,6 +22,7 @@ A polished personal ETF portfolio workspace built with Python, Streamlit, Pandas
 - Separate approximate money-weighted XIRR using recorded transaction flows.
 - Holdings risk view with annualized volatility, maximum drawdown, worst daily move and correlations. Price-series gaps are not silently filled indefinitely.
 - ETF Research workspace for instrument metadata, exposure by held ETF, sourced constituent CSV imports, weight-coverage checks and pairwise shared-weight overlap.
+- Portfolio X-Ray combines current positions with automatically fetched, dated public holdings for supported Amundi, iShares, Vanguard and Xtrackers ETFs; other funds can use a dated issuer CSV import.
 - Market proxy dashboard, AI read-only analyst (optional OpenRouter key), and Monte Carlo Forecast Lab whose inflation-adjusted labels follow the selected reporting currency.
 
 ### Data reliability and operations

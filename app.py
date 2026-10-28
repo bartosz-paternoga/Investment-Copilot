@@ -34,7 +34,8 @@ from performance_engine import (
     compare_to_benchmark, convert_prices_to_currency, linked_attribution,
     performance_summary, portfolio_total_return,
 )
-from research_analytics import calculate_etf_overlap, holdings_weight_coverage
+from research_analytics import calculate_etf_overlap, calculate_portfolio_xray, holdings_weight_coverage
+from etf_holdings_sources import fetch_issuer_holdings
 
 TABLE_AMOUNT_WIDTH = None
 TABLE_PERCENT_WIDTH = None
@@ -45,6 +46,11 @@ try:
 except OSError:
     APP_VERSION = "dev"
 st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+
+@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+def _cached_issuer_holdings(fund_ticker: str, isin: str = "") -> dict:
+    """Cache public issuer data by fund so normal app reruns never refetch it."""
+    return fetch_issuer_holdings(fund_ticker, isin)
 
 # A failed cookie-probe fragment can leave its transient flags in an existing
 # browser session after a code update. Reset only those flags once so the new
@@ -257,7 +263,7 @@ else:
 
 
 
-PAGES = ["Overview", "Investments", "Transactions", "Performance", "ETF Research", "Watchlist", "Holdings & risk", "Market analysis", "AI Analyst", "Forecast Lab", "Data operations", "Methodology & data"]
+PAGES = ["Overview", "Investments", "Transactions", "Performance", "ETF Research", "Watchlist", "Holdings & risk", "Portfolio X-Ray", "Market analysis", "AI Analyst", "Forecast Lab", "Data operations", "Methodology & data"]
 st.sidebar.markdown('''<div class="brand-lockup"><div class="brand-mark">IP</div><div><div class="brand-name">Investment Copilot</div><div class="brand-caption">INVESTOR PORTFOLIO</div></div></div>''', unsafe_allow_html=True)
 st.sidebar.caption(f"Version {APP_VERSION}")
 page = st.sidebar.radio("Workspace", PAGES, index=0, label_visibility="collapsed", key="workspace_page")
@@ -1244,7 +1250,7 @@ elif page == "Performance":
 elif page == "ETF Research":
     st.title("ETF research & instrument master")
     st.markdown('<div class="terminal-tag">INSTRUMENT IDENTITY · FUND NOTES · OVERLAP READINESS</div>', unsafe_allow_html=True)
-    st.write("Maintain stable identifiers and your own display labels. Automated country/sector look-through requires a trusted holdings dataset; the app will not invent fund constituents.")
+    st.write("Maintain stable identifiers and your own display labels. Import sourced ETF holdings to calculate company look-through; optional sector, country and region columns power the corresponding exposure views.")
     with st.form("instrument_master_form"):
         ticker_input = st.text_input("Ticker / listing symbol", placeholder="VWCE.DE").strip().upper()
         name_input = st.text_input("Preferred display name", placeholder="Vanguard FTSE All-World UCITS ETF")
@@ -1273,15 +1279,16 @@ elif page == "ETF Research":
         fig = px.treemap(priced, path=["ticker"], values="value", color="weight_pct", color_continuous_scale="Greys", title=f"Priced positions by market value ({base_ccy})")
         fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("This is exposure by held ETF, not look-through exposure to underlying securities. Underlying holdings overlap and sector/geography are not inferred without source data.")
+        st.caption("This is exposure by held ETF. Use Portfolio X-Ray for sourced company, sector and geographic look-through; missing classifications remain unknown.")
     else:
         st.info("Exposure visualization will appear after at least one position has a valid price and FX rate.")
 
     st.divider()
     st.subheader("Sourced ETF constituent data & overlap")
-    st.write("Import issuer/factsheet holdings as of a stated date. The app never invents constituents. Overlap is calculated only from imported rows and can be understated when your source includes only top holdings.")
-    template = "fund_ticker,constituent_ticker,weight_pct,constituent_name\n".encode("utf-8")
+    st.write("Portfolio X-Ray automatically retrieves public holdings for supported Amundi, iShares, Vanguard and Xtrackers funds. Use this importer for other funds or when you want to provide a specific dated issuer snapshot. The app never invents constituents or classifications.")
+    template = "fund_ticker,constituent_ticker,weight_pct,constituent_name,sector,country,region\n".encode("utf-8")
     st.download_button("Download CSV template", template, "etf_constituents_template.csv", "text/csv")
+    st.caption("The required columns are fund_ticker, constituent_ticker and weight_pct. Add sector, country and region when your source provides them; the app leaves missing classifications unknown.")
     with st.expander("Import a holdings CSV", expanded=False):
         source_name = st.text_input("Data source / issuer factsheet name", placeholder="ETF issuer factsheet, holdings export or licensed provider", key="holdings_source_name")
         source_url = st.text_input("Source URL (optional for local files)", placeholder="https://…", key="holdings_source_url")
@@ -1307,7 +1314,6 @@ elif page == "ETF Research":
                 candidate["fund_ticker"] = candidate["fund_ticker"].fillna("").astype(str).str.strip().str.upper()
                 candidate["constituent_ticker"] = candidate["constituent_ticker"].fillna("").astype(str).str.strip().str.upper()
                 candidate["weight_pct"] = pd.to_numeric(candidate["weight_pct"], errors="coerce")
-                has_name = "constituent_name" in candidate.columns
                 if candidate["fund_ticker"].eq("").any() or candidate["constituent_ticker"].eq("").any():
                     st.error("Each row needs both a fund_ticker and constituent_ticker.")
                 elif candidate["weight_pct"].isna().any() or (candidate["weight_pct"] < 0).any() or (candidate["weight_pct"] > 100).any():
@@ -1318,7 +1324,10 @@ elif page == "ETF Research":
                     try:
                         counts = {}
                         for fund, group in candidate.groupby("fund_ticker"):
-                            selected_cols = ["constituent_ticker", "weight_pct"] + (["constituent_name"] if has_name else [])
+                            selected_cols = ["constituent_ticker", "weight_pct"] + [
+                                column for column in ("constituent_name", "sector", "country", "region")
+                                if column in group.columns
+                            ]
                             counts[fund] = save_etf_holdings(fund, group[selected_cols], source_name=source_name,
                                 source_url=source_url, as_of=as_of_date.isoformat())
                         st.success("Imported sourced holdings for " + ", ".join(f"{fund} ({n} rows)" for fund, n in counts.items()))
@@ -1332,7 +1341,7 @@ elif page == "ETF Research":
         st.subheader("Imported dataset coverage & provenance")
         coverage = holdings_weight_coverage(latest_holdings)
         european_dataframe(coverage, use_container_width=True, hide_index=True)
-        european_dataframe(latest_holdings[[c for c in ["fund_ticker", "constituent_ticker", "constituent_name", "weight_pct", "source_name", "source_url", "as_of", "imported_at"] if c in latest_holdings.columns]], use_container_width=True, hide_index=True)
+        european_dataframe(latest_holdings[[c for c in ["fund_ticker", "constituent_ticker", "constituent_name", "weight_pct", "sector", "country", "region", "source_name", "source_url", "as_of", "imported_at"] if c in latest_holdings.columns]], use_container_width=True, hide_index=True)
         available_funds = sorted(latest_holdings["fund_ticker"].unique().tolist())
         held_defaults = [fund for fund in available_funds if fund in active_tickers]
         default_funds = held_defaults if len(held_defaults) >= 2 else available_funds
@@ -1511,6 +1520,203 @@ elif page == "Holdings & risk":
                 st.caption("Historical return shown is adjusted ETF price history from the data provider; verify dividend treatment and listing coverage. This is not a holdings-weighted portfolio backtest.")
         st.subheader("Risk interpretation")
         st.markdown("- **Volatility** measures dispersion of daily price returns; it is not the probability of losing money.\n- **Maximum drawdown** is the largest peak-to-trough fall in the selected history.\n- **Correlation** measures how similarly ETF prices moved in this sample; it can change materially in a crisis.\n- Trading currency is not always the same as underlying economic currency exposure. Hedging and fund domicile matter.")
+
+elif page == "Portfolio X-Ray":
+    st.title("Portfolio X-Ray — underlying exposures")
+    st.markdown('<div class="terminal-tag">LOOK THROUGH YOUR FUNDS · FIND HIDDEN CONCENTRATION</div>', unsafe_allow_html=True)
+    st.write("See the companies and classifications inside your ETFs. The app loads public issuer holdings for supported funds and combines them using your current portfolio values.")
+
+    xray_tickers = sorted(
+        portfolio.loc[portfolio["market_value_base"].notna(), "ticker"].dropna().astype(str).str.strip().str.upper().unique()
+    ) if not portfolio.empty else []
+    instrument_isins = {}
+    try:
+        xray_instruments = list_instruments()
+        if not xray_instruments.empty and {"ticker", "isin"}.issubset(xray_instruments.columns):
+            instrument_isins = dict(zip(
+                xray_instruments["ticker"].fillna("").astype(str).str.upper(),
+                xray_instruments["isin"].fillna("").astype(str).str.upper(),
+            ))
+    except Exception:
+        pass
+
+    xray_existing = list_etf_holdings(latest_only=True)
+    existing_by_fund = {
+        str(fund).upper(): group.copy()
+        for fund, group in xray_existing.groupby("fund_ticker")
+    } if not xray_existing.empty else {}
+
+    def needs_issuer_refresh(fund: str) -> bool:
+        current = existing_by_fund.get(fund)
+        if current is None or current.empty:
+            return True
+        # Preserve user-imported files. Auto-refresh only snapshots previously
+        # fetched by the issuer connector.
+        if not current["source_name"].fillna("").astype(str).str.contains("issuer holdings", case=False).any():
+            return False
+        imported_at = pd.to_datetime(current["imported_at"], errors="coerce", utc=True).max()
+        if pd.isna(imported_at):
+            return True
+        return (pd.Timestamp.now(tz="UTC") - imported_at).days >= 7
+
+    missing_or_old = [fund for fund in xray_tickers if needs_issuer_refresh(fund)]
+    force_xray_refresh = st.button(
+        "Refresh issuer holdings",
+        help="Refresh automatically sourced holdings. Your manually imported snapshots are kept as they are.",
+        key="xray_refresh_issuer_holdings",
+    )
+    sync_token = (user_key, tuple(xray_tickers), date.today().isoformat())
+    already_attempted = st.session_state.get("_xray_issuer_sync_token") == sync_token
+    if force_xray_refresh or (missing_or_old and not already_attempted):
+        if force_xray_refresh:
+            _cached_issuer_holdings.clear()
+        synced, sync_errors = [], []
+        with st.spinner("Loading dated holdings from ETF issuer sources…"):
+            for fund in xray_tickers:
+                if not force_xray_refresh and fund not in missing_or_old:
+                    continue
+                current = existing_by_fund.get(fund)
+                if force_xray_refresh and current is not None and not current.empty and not current["source_name"].fillna("").astype(str).str.contains("issuer holdings", case=False).any():
+                    continue
+                try:
+                    snapshot = _cached_issuer_holdings(fund, instrument_isins.get(fund, ""))
+                    to_save = snapshot["holdings"].drop(columns=["_source_date"], errors="ignore")
+                    save_etf_holdings(
+                        fund,
+                        to_save,
+                        source_name=snapshot["source_name"],
+                        source_url=snapshot["source_url"],
+                        as_of=snapshot["as_of"],
+                    )
+                    synced.append(f"{fund} ({snapshot['holding_count']} constituents, {snapshot['as_of']})")
+                except Exception as exc:
+                    sync_errors.append(f"{fund}: {exc}")
+        st.session_state["_xray_issuer_sync_token"] = sync_token
+        st.session_state["_xray_issuer_sync_result"] = (sync_token, synced, sync_errors)
+        xray_existing = list_etf_holdings(latest_only=True)
+
+    sync_result = st.session_state.get("_xray_issuer_sync_result")
+    visible_sync_errors = []
+    if sync_result and sync_result[0] == sync_token:
+        _, synced, sync_errors = sync_result
+        if synced:
+            st.success("Loaded issuer holdings: " + "; ".join(synced))
+        if sync_errors:
+            visible_sync_errors = sync_errors
+            st.error("Issuer holdings could not be loaded: " + " · ".join(sync_errors))
+    st.caption("Holdings are refreshed automatically when missing or at least 7 days old. The date shown is the issuer's holdings date when supplied; otherwise it is the date the app retrieved the file. ETF prices and FX rates are separate data and do not contain constituent lists.")
+
+    xray_holdings = xray_existing
+    xray = calculate_portfolio_xray(portfolio, xray_holdings)
+    if portfolio.empty or xray["portfolio_value"] <= 0:
+        st.info("Add an ETF position with a valid current price and FX rate to calculate underlying exposure.")
+    else:
+        companies = xray["companies"]
+        shared_count = int(companies["etf_count"].gt(1).sum()) if not companies.empty else 0
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Priced portfolio covered", european_percent(xray["coverage_pct"]))
+        c2.metric("Look-through value", money(xray["covered_value"]))
+        c3.metric("Underlying companies", european_number(len(companies), decimals=0))
+        c4.metric("Companies in multiple ETFs", european_number(shared_count, decimals=0))
+
+        if not bool(portfolio.attrs.get("valuation_complete", False)):
+            st.warning("Some positions do not have a current value. Coverage is calculated against priced positions only.")
+        if xray_holdings.empty:
+            if visible_sync_errors:
+                st.info("The table is empty because the issuer download failed. The message above names the fund and source error. After the source issue is fixed, press **Refresh issuer holdings** to try again.")
+            else:
+                st.info("No issuer holdings are saved for this portfolio yet. Supported ETFs are fetched automatically; if a fund is not supported, import its issuer holdings file in ETF Research.")
+        elif xray["covered_positions"] == 0:
+            st.warning("No held position matched a valid constituent snapshot. Review the fund symbols and snapshot weights in ETF Research.")
+        st.caption("Partial snapshots contribute only their reported weights; they are not expanded to 100%. Totals slightly above 100% are scaled down to 100%; snapshots above 110% are excluded. Company overlap uses normalized company names to align provider naming differences; separate share classes may be combined when their names identify the same company.")
+
+        company_tab, sector_tab, country_tab, region_tab, coverage_tab = st.tabs(
+            ["Companies", "Sectors", "Countries", "Regions", "Data coverage"]
+        )
+        with company_tab:
+            if companies.empty:
+                st.info("No constituent exposures are available for the priced positions in this portfolio.")
+            else:
+                company_view = companies.rename(columns={
+                    "constituent_ticker": "Ticker",
+                    "constituent_name": "Company / constituent",
+                    "exposure_value": f"Value ({base_ccy})",
+                    "portfolio_weight_pct": "Portfolio weight %",
+                    "etf_count": "ETF count",
+                    "held_through": "Held through ETFs",
+                })
+                company_view.insert(
+                    0, "Overlap",
+                    company_view["ETF count"].map(lambda count: "Shared" if count > 1 else "One ETF"),
+                )
+                top_companies = company_view.head(15).sort_values("Portfolio weight %", ascending=True)
+                chart = px.bar(
+                    top_companies,
+                    x="Portfolio weight %",
+                    y="Company / constituent",
+                    orientation="h",
+                    color="Overlap",
+                    color_discrete_map={"Shared": "#475569", "One ETF": "#aeb9c6"},
+                    title="Largest underlying company exposures",
+                    hover_data=["Ticker", "ETF count", "Held through ETFs"],
+                )
+                chart.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_title="Share of priced portfolio (%)", yaxis_title=None, legend_title=None)
+                st.plotly_chart(chart, use_container_width=True, config={"displayModeBar": False})
+                only_shared = st.checkbox("Show only companies held through multiple ETFs", key="xray_only_shared")
+                shown_companies = company_view[company_view["ETF count"].gt(1)] if only_shared else company_view
+                european_dataframe(shown_companies, use_container_width=True, hide_index=True, column_config={
+                    "Value (" + base_ccy + ")": st.column_config.NumberColumn(format="%.2f"),
+                    "Portfolio weight %": st.column_config.NumberColumn(format="%.2f%%"),
+                    "ETF count": st.column_config.NumberColumn(format="%.0f", width="small"),
+                })
+                st.download_button("Download company exposures CSV", company_view.to_csv(index=False).encode("utf-8"), "portfolio_xray_companies.csv", "text/csv")
+
+        def render_xray_dimension(data: pd.DataFrame, label: str, download_name: str) -> None:
+            if data.empty:
+                st.info(f"No {label.lower()} classifications are available. Add a {label.lower()} column to sourced constituent CSVs in ETF Research.")
+                return
+            top_categories = data.head(15).sort_values("portfolio_weight_pct", ascending=True)
+            chart = px.bar(
+                top_categories,
+                x="portfolio_weight_pct",
+                y="category",
+                orientation="h",
+                title=f"Largest underlying exposures by {label.lower()}",
+                hover_data=["constituents", "etfs"],
+                color_discrete_sequence=["#64748b"],
+            )
+            chart.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_title="Share of priced portfolio (%)", yaxis_title=None, showlegend=False)
+            st.plotly_chart(chart, use_container_width=True, config={"displayModeBar": False})
+            st.caption(f"Only constituent rows with a nonblank {label.lower()} classification are included in this view; unclassified weight remains visible in the overall coverage figures.")
+            view = data.rename(columns={
+                "category": label,
+                "exposure_value": f"Value ({base_ccy})",
+                "portfolio_weight_pct": "Portfolio weight %",
+                "constituents": "Constituents",
+                "etfs": "ETFs",
+            })
+            european_dataframe(view, use_container_width=True, hide_index=True, column_config={
+                "Value (" + base_ccy + ")": st.column_config.NumberColumn(format="%.2f"),
+                "Portfolio weight %": st.column_config.NumberColumn(format="%.2f%%"),
+                "Constituents": st.column_config.NumberColumn(format="%.0f", width="small"),
+                "ETFs": st.column_config.NumberColumn(format="%.0f", width="small"),
+            })
+            st.download_button(f"Download {label.lower()} exposures CSV", view.to_csv(index=False).encode("utf-8"), download_name, "text/csv")
+
+        with sector_tab:
+            render_xray_dimension(xray["sectors"], "Sector", "portfolio_xray_sectors.csv")
+        with country_tab:
+            render_xray_dimension(xray["countries"], "Country", "portfolio_xray_countries.csv")
+        with region_tab:
+            render_xray_dimension(xray["regions"], "Region", "portfolio_xray_regions.csv")
+        with coverage_tab:
+            st.caption("Coverage is shown for each priced position. Only constituent rows matched to funds you currently hold are included.")
+            european_dataframe(xray["coverage"], use_container_width=True, hide_index=True, column_config={
+                "Position value": st.column_config.NumberColumn(format="%.2f"),
+                "Snapshot weight %": st.column_config.NumberColumn(format="%.2f%%"),
+                "Look-through value": st.column_config.NumberColumn(format="%.2f"),
+            })
+            st.download_button("Download look-through coverage CSV", xray["coverage"].to_csv(index=False).encode("utf-8"), "portfolio_xray_coverage.csv", "text/csv")
 
 elif page == "Market analysis":
     st.title("Markets & macro dashboard")
@@ -1709,7 +1915,7 @@ elif page == "Methodology & data":
 - **Snapshots:** Manual snapshots use the selected reporting currency. The scheduled worker records a PLN snapshot only when valuation is complete. Snapshots are point-in-time values, not returns.
 - **Performance page:** The ETF-holdings return proxy chain-links weighted adjusted-close returns using quantities from the ledger. A selected benchmark is converted to the same reporting currency and compared over common dates. It excludes broker cash, taxes, withholding, non-ETF holdings and exact intraday trade-time effects. The separate XIRR is approximate and is not a broker-reconciled account return.
 - **Data gaps:** Short forward-fills are limited to three observations for aligning exchange/FX holiday calendars; longer gaps stop a comparison segment. Historical risk calculations do not forward-fill the underlying histories.
-- **Instrument master, watchlist and constituent sources:** User-managed metadata and symbols are stored in SQLite. Constituent files retain source name, optional source URL and as-of date. Overlap is computed from imported weights, not fabricated data; incomplete constituent snapshots understate overlap.
+- **Instrument master, watchlist and constituent sources:** User-managed metadata and symbols are stored in SQLite. Portfolio X-Ray automatically retrieves dated holdings for supported Amundi, iShares, Vanguard and Xtrackers ETFs; imported CSV snapshots remain available for other providers. Source name, link and holdings date are retained. Partial snapshots are not expanded to 100%, and sector/country/region views use source classifications (or a broad region derived from the supplied country).
 - **Scheduled worker:** `scripts/market_data_worker.py` periodically refreshes quotes and history. It is read-only and does not trade. Provider requests can fail or be throttled; inspect the run log under Data operations.
 - **Forecasts:** Monte Carlo scenarios use fixed user inputs and simplified lognormal monthly returns. Real-value result labels follow the selected reporting currency. The assumptions do not account for changing volatility regimes, fat tails, valuation levels or guaranteed outcomes.
 
