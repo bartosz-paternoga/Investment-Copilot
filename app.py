@@ -10,48 +10,12 @@ from contextvars import copy_context
 from pathlib import Path
 from datetime import date
 
-import streamlit as st
-
-st.set_page_config(
-    page_title="Investment Copilot | Portfolio",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-_startup_status = None
-if not st.session_state.get("_app_startup_ready", False):
-    _startup_status = st.empty()
-    _startup_status.markdown(
-        """
-        <style>
-        #app-startup-overlay {
-            position: fixed; inset: 0; z-index: 2147483646;
-            display: grid; place-content: center; justify-items: center; gap: 14px;
-            background: #f4f6f8; color: #475569;
-            font: 600 16px/1.4 sans-serif;
-        }
-        #app-startup-spinner {
-            width: 34px; height: 34px; border: 3px solid #d9e2eb;
-            border-top-color: #64748b; border-radius: 50%;
-            animation: app-startup-spin .8s linear infinite;
-        }
-        @keyframes app-startup-spin { to { transform: rotate(360deg); } }
-        </style>
-        <div id="app-startup-overlay" role="status" aria-live="polite">
-            <div id="app-startup-spinner"></div>
-            <div>Starting Investment Copilot…</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    logging.getLogger("investment_copilot").info("Application script started.")
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
+import streamlit as st
 from dotenv import load_dotenv
 from database import database_url, set_active_tenant_schema
 from auth import render_auth_gate, render_account_sidebar
@@ -80,6 +44,7 @@ try:
     APP_VERSION = Path(__file__).with_name("VERSION").read_text(encoding="utf-8").strip()
 except OSError:
     APP_VERSION = "dev"
+st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 LOGGER = logging.getLogger("investment_copilot")
 LOGGER.info("Application modules loaded (version %s).", APP_VERSION)
 
@@ -94,12 +59,6 @@ def _clear_auth_transition_overlay() -> None:
     _auth_transition_overlay.empty()
     _auth_transition_overlay_visible = False
     st.session_state["_auth_transition_loading"] = False
-
-
-def _clear_startup_status() -> None:
-    if _startup_status is not None:
-        _startup_status.empty()
-    st.session_state["_app_startup_ready"] = True
 
 
 def _show_auth_transition_overlay(message="Opening your portfolio…") -> None:
@@ -255,11 +214,9 @@ if database_url():
         _current_user = render_auth_gate(st, show_transition=_show_auth_transition_overlay)
     except Exception:
         LOGGER.exception("Authentication gate failed during app startup or sign-in.")
-        _clear_startup_status()
         _clear_auth_transition_overlay()
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
-    _clear_startup_status()
     if _current_user is None:
         if st.session_state.get("_auth_cookie_probe_pending", False):
             _render_cookie_probe_timeout()
@@ -277,9 +234,7 @@ elif os.getenv("ETF_APP_LOCAL_DEV_MODE", "").strip().lower() in {"1", "true", "y
     st.markdown('<div class="dev-mode-notice"><strong>Local development mode</strong><span>Authentication is bypassed and data is stored in local SQLite. This mode is for testing on your own computer only.</span></div>', unsafe_allow_html=True)
     set_active_tenant_schema(None)
     initialize_db()
-    _clear_startup_status()
 else:
-    _clear_startup_status()
     st.error("Deployment is not configured. Add DATABASE_URL and the bootstrap administrator secrets in Streamlit Community Cloud. For local single-user development only, set ETF_APP_LOCAL_DEV_MODE=1.")
     st.stop()
 
