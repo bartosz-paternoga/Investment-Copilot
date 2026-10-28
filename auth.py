@@ -506,18 +506,36 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
         if user:
             LOGGER.info("Password check accepted; creating an app session.")
             token, expires_at = create_auth_session(user["user_id"], stay_signed_in)
+            # Save the verified session before mounting the browser cookie
+            # component. Its response can cause an immediate Streamlit rerun;
+            # that rerun must already have enough state to stay authenticated.
+            st.session_state["auth_session_token"] = token
+            st.session_state["auth_user_id"] = user["user_id"]
+            st.session_state["_auth_login_transition"] = {
+                "token_hash": _session_token_hash(token),
+                "user": {
+                    key: user[key]
+                    for key in (
+                        "user_id", "username", "display_name", "email", "role",
+                        "tenant_schema", "active", "must_change_password",
+                    )
+                    if key in user
+                },
+                "deadline": time.monotonic() + 15,
+            }
             try:
                 _set_auth_cookie(st, token, expires_at, stay_signed_in)
             except Exception:
                 LOGGER.exception("Could not request the browser session-cookie write.")
                 revoke_auth_session(token)
+                st.session_state.pop("auth_session_token", None)
+                st.session_state.pop("auth_user_id", None)
+                st.session_state.pop("_auth_login_transition", None)
                 st.session_state["_auth_transition_loading"] = False
                 st.error("Could not establish the browser session. Please refresh and try again.")
             else:
                 # Continue into the app in this run instead of showing the old
                 # login form while a second full portfolio run is starting.
-                st.session_state["auth_session_token"] = token
-                st.session_state["auth_user_id"] = user["user_id"]
                 auth_screen.empty()
                 if user["must_change_password"]:
                     st.session_state["_auth_transition_loading"] = False
@@ -531,18 +549,6 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                             password_2 = st.text_input("Confirm new password", type="password")
                             submit = st.form_submit_button("Save password", type="primary")
                     return None
-                st.session_state["_auth_login_transition"] = {
-                    "token_hash": _session_token_hash(token),
-                    "user": {
-                        key: user[key]
-                        for key in (
-                            "user_id", "username", "display_name", "email", "role",
-                            "tenant_schema", "active", "must_change_password",
-                        )
-                        if key in user
-                    },
-                    "deadline": time.monotonic() + 15,
-                }
                 return user
         else:
             LOGGER.warning("Password check rejected.")
