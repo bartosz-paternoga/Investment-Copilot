@@ -4,7 +4,6 @@ import json
 import hashlib
 import logging
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from pathlib import Path
@@ -49,7 +48,7 @@ st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈"
 # A failed cookie-probe fragment can leave its transient flags in an existing
 # browser session after a code update. Reset only those flags once so the new
 # app run can show the login form or restore the browser cookie normally.
-_AUTH_FLOW_VERSION = "cookie-probe-fragment-fix-2"
+_AUTH_FLOW_VERSION = "cookie-probe-no-fragment-3"
 if st.session_state.get("_auth_flow_version") != _AUTH_FLOW_VERSION:
     for _auth_state_key in (
         "_auth_cookie_probe_pending",
@@ -117,20 +116,6 @@ def _show_auth_transition_overlay(message="Opening your portfolio…") -> None:
 if _auth_transition_overlay_visible:
     _show_auth_transition_overlay()
 
-
-def _render_cookie_probe_timeout() -> None:
-    """Clear the saved-cookie cover quickly if the browser component stalls."""
-    @st.fragment(run_every=0.25)
-    def cookie_probe_timeout():
-        if not st.session_state.get("_auth_cookie_probe_pending", False):
-            return
-        deadline = float(st.session_state.get("_auth_cookie_probe_deadline", 0.0))
-        if time.monotonic() >= deadline:
-            st.session_state["_auth_cookie_probe_complete"] = True
-            st.session_state.pop("_auth_cookie_probe_pending", None)
-            st.rerun()
-
-    cookie_probe_timeout()
 
 # A restrained steel/slate palette keeps charts consistent with the neutral UI.
 px.defaults.color_discrete_sequence = ["#475569", "#94a3b8", "#cbd5e1", "#334155", "#64748b", "#e2e8f0", "#7c8798", "#b0bac7"]
@@ -232,10 +217,7 @@ if database_url():
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
     if _current_user is None:
-        if st.session_state.get("_auth_cookie_probe_pending", False):
-            _render_cookie_probe_timeout()
-        else:
-            _clear_auth_transition_overlay()
+        _clear_auth_transition_overlay()
         st.stop()
     try:
         set_active_tenant_schema(_current_user["tenant_schema"])
