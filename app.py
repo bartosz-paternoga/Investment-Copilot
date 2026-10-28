@@ -32,6 +32,9 @@ from performance_engine import (
 )
 from research_analytics import calculate_etf_overlap, holdings_weight_coverage
 
+TABLE_AMOUNT_WIDTH = None
+TABLE_PERCENT_WIDTH = None
+
 load_dotenv()
 try:
     APP_VERSION = Path(__file__).with_name("VERSION").read_text(encoding="utf-8").strip()
@@ -430,6 +433,17 @@ def european_dataframe(data, *args, **kwargs):
     formatters = {}
     if isinstance(data, pd.DataFrame) and not data.empty:
         for column in data.columns:
+            normalized_name = str(column).casefold().strip()
+            amount_column = (
+                normalized_name in {"amount", "cash", "fee", "unit price"}
+                or normalized_name.startswith(("value (", "cost (", "p/l (", "market value"))
+            )
+            if amount_column and not pd.api.types.is_numeric_dtype(data[column].dtype):
+                numeric_values = pd.to_numeric(data[column], errors="coerce")
+                if numeric_values.notna().any() or data[column].isna().any():
+                    data = data.copy()
+                    data[column] = numeric_values
+        for column in data.columns:
             if not pd.api.types.is_numeric_dtype(data[column].dtype):
                 continue
             column_name = str(column)
@@ -459,14 +473,21 @@ def european_dataframe(data, *args, **kwargs):
                 clean_type_config = dict(type_config)
                 clean_type_config.pop("format", None)
                 if amount_column:
-                    clean_type_config["width"] = "medium"
+                    clean_type_config["width"] = TABLE_AMOUNT_WIDTH
+                elif percentage_column:
+                    clean_type_config["width"] = TABLE_PERCENT_WIDTH
                 clean_config["type_config"] = clean_type_config
                 display_config[column_name] = clean_config
             elif amount_column:
-                display_config[column_name] = st.column_config.NumberColumn(width="medium")
+                display_config[column_name] = st.column_config.NumberColumn(width=TABLE_AMOUNT_WIDTH)
+            elif percentage_column:
+                display_config[column_name] = st.column_config.NumberColumn(width=TABLE_PERCENT_WIDTH)
         if formatters:
             data = data.style.format(formatters, na_rep="—")
     kwargs["column_config"] = display_config
+    # Keep the grid at its natural content width. Stretching it to the whole
+    # page spreads unused space across every column, especially money columns.
+    kwargs["use_container_width"] = False
     return _render_dataframe(data, *args, **kwargs)
 
 
@@ -525,20 +546,20 @@ def display_position_table(data: pd.DataFrame):
     })
     european_dataframe(view, use_container_width=True, hide_index=True, column_config={
         "Ticker": st.column_config.TextColumn(width="small"),
-        "Instrument": st.column_config.TextColumn(width="medium"),
+        "Instrument": st.column_config.TextColumn(width=160),
         "Units": st.column_config.NumberColumn(format="%.0f", width="small"),
         "Currency": st.column_config.TextColumn(width="small"),
         "Price": st.column_config.NumberColumn(format="%.4f", width="small"),
         "Price change %": st.column_config.NumberColumn(format="%+.2f%%", width="small", help="Today's instrument price move in its listing currency; daily portfolio P/L also includes the FX move."),
-        "Price date / time": st.column_config.TextColumn(width="medium", help=f"Exchange price date and quote fetch time in {display_timezone}."),
+        "Price date / time": st.column_config.TextColumn(width=180, help=f"Exchange price date and quote fetch time in {display_timezone}."),
         f"FX → {base_ccy}": st.column_config.NumberColumn(format="%.5f", width="small"),
-        "FX date / time": st.column_config.TextColumn(width="medium", help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
-        "Value (CCY)": st.column_config.NumberColumn(format="%.2f", width="medium"),
-        f"Value ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width="medium"),
+        "FX date / time": st.column_config.TextColumn(width=215, help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
+        "Value (CCY)": st.column_config.NumberColumn(format="%.2f", width=TABLE_AMOUNT_WIDTH),
+        f"Value ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width=TABLE_AMOUNT_WIDTH),
         "Weight %": st.column_config.NumberColumn(format="%.2f%%", width="small"),
         "P/L %": st.column_config.NumberColumn(format="%+.2f%%", width="small"),
-        f"Cost ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width="medium"),
-        f"P/L ({base_ccy})": st.column_config.NumberColumn(format="%+.2f", width="medium"),
+        f"Cost ({base_ccy})": st.column_config.NumberColumn(format="%.2f", width=TABLE_AMOUNT_WIDTH),
+        f"P/L ({base_ccy})": st.column_config.NumberColumn(format="%+.2f", width=TABLE_AMOUNT_WIDTH),
         "Status": st.column_config.TextColumn(width="small"),
     }, row_height=34)
 
@@ -572,9 +593,9 @@ if page == "Overview":
                 "Currency":st.column_config.TextColumn(width="small"),
                 "Price":st.column_config.NumberColumn(format="%.4f", width="small"),
                 "Price change %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
-                "Price date / time":st.column_config.TextColumn(width="medium", help=f"Exchange price date and quote fetch time in {display_timezone}."),
+                "Price date / time":st.column_config.TextColumn(width=180, help=f"Exchange price date and quote fetch time in {display_timezone}."),
                 "Status":st.column_config.TextColumn(width="small"),
-                "Issue":st.column_config.TextColumn(width="large"),
+                "Issue":st.column_config.TextColumn(width=250),
             })
         left,right = st.columns(2)
         with left:
@@ -617,10 +638,10 @@ if page == "Overview":
                                   "FX date / time":fx_timing})
             european_dataframe(pd.DataFrame(cash_rows), use_container_width=True, hide_index=True, row_height=34, column_config={
                 "Currency":st.column_config.TextColumn(width="small"),
-                "Cash":st.column_config.NumberColumn(format="%.2f", width="medium"),
+                "Cash":st.column_config.NumberColumn(format="%.2f", width=TABLE_AMOUNT_WIDTH),
                 "FX rate":st.column_config.NumberColumn(format="%.5f", width="small"),
-                "FX date / time":st.column_config.TextColumn(width="medium", help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
-                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width="medium"),
+                "FX date / time":st.column_config.TextColumn(width=215, help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
+                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width=TABLE_AMOUNT_WIDTH),
             })
             if any(row["Cash"] < -1e-8 for row in cash_rows):
                 st.warning("One or more cash balances are negative. This commonly means buys/sells were recorded without matching cash-in/cash-out events, or the cash ledger is incomplete.")
@@ -749,16 +770,16 @@ elif page == "Investments":
         else:
             european_dataframe(view, use_container_width=True, hide_index=True, height=min(470, 48 + 34 * len(view)), row_height=34, column_config={
                 "Ticker":st.column_config.TextColumn(width="small"),
-                "Instrument":st.column_config.TextColumn(width="medium"),
+                "Instrument":st.column_config.TextColumn(width=160),
                 "Units":st.column_config.NumberColumn(format="%.0f", width="small"),
                 "Price":st.column_config.NumberColumn(format="%.4f", width="small"),
                 "Currency":st.column_config.TextColumn(width="small"),
-                "Price date / time":st.column_config.TextColumn(width="medium", help=f"Exchange price date and quote fetch time in {display_timezone}."),
+                "Price date / time":st.column_config.TextColumn(width=180, help=f"Exchange price date and quote fetch time in {display_timezone}."),
                 f"FX → {base_ccy}":st.column_config.NumberColumn(format="%.5f", width="small"),
-                "FX date / time":st.column_config.TextColumn(width="medium", help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
-                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width="medium"),
+                "FX date / time":st.column_config.TextColumn(width=215, help=f"Current spot FX quote date and fetch time in {display_timezone}; a daily reference rate is used if a spot quote is unavailable."),
+                f"Value ({base_ccy})":st.column_config.NumberColumn(format="%.2f", width=TABLE_AMOUNT_WIDTH),
                 "Price change %":st.column_config.NumberColumn(format="%+.2f%%", width="small", help="Today's instrument price move in its listing currency; daily portfolio P/L also includes the FX move."),
-                f"P/L ({base_ccy})":st.column_config.NumberColumn(format="%+.2f", width="medium"),
+                f"P/L ({base_ccy})":st.column_config.NumberColumn(format="%+.2f", width=TABLE_AMOUNT_WIDTH),
                 "Return %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
                 "Weight %":st.column_config.NumberColumn(format="%.2f%%", width="small"),
                 "Status":st.column_config.TextColumn(width="small"),
@@ -778,7 +799,7 @@ elif page == "Investments":
             {"ticker":"", "quantity":0.0, "average_cost":0.0, "currency":"USD", "display_name":""},
         ])
         with st.form("quick_holdings_form", clear_on_submit=True):
-            quick_df = st.data_editor(template, num_rows="dynamic", use_container_width=True, hide_index=True, key="quick_holdings_editor_v2", column_config={
+            quick_df = st.data_editor(template, num_rows="dynamic", use_container_width=False, hide_index=True, key="quick_holdings_editor_v2", column_config={
                 "ticker":st.column_config.TextColumn("Ticker / listing", help="Examples: VWCE.DE, EUNL.DE, CSPX.L"),
                 "quantity":st.column_config.NumberColumn("Units", min_value=0.0, format="%.0f", width="small"),
                 "average_cost":st.column_config.NumberColumn("Average cost / unit", min_value=0.0, format="localized", step=0.01, help="Cost in the currency selected on this row. Use 0 if unknown."),
@@ -970,9 +991,9 @@ elif page == "Transactions":
             "Units":st.column_config.NumberColumn(width="small", format="%.0f"),
             "Unit price":st.column_config.NumberColumn(width="small", format="%.4f"),
             "Currency":st.column_config.TextColumn(width="small"),
-            "Amount":st.column_config.NumberColumn(width="medium", format="%.2f"),
-            "Fee":st.column_config.NumberColumn(width="medium", format="%.2f"),
-            "Notes":st.column_config.TextColumn(width="medium"),
+            "Amount":st.column_config.NumberColumn(width=TABLE_AMOUNT_WIDTH, format="%.2f"),
+            "Fee":st.column_config.NumberColumn(width=TABLE_AMOUNT_WIDTH, format="%.2f"),
+            "Notes":st.column_config.TextColumn(width=180),
         })
         st.download_button("Download ledger CSV", transactions.to_csv(index=False).encode("utf-8"), "etf_transactions.csv", "text/csv")
         ids = transactions["id"].astype(int).tolist()
@@ -1301,13 +1322,13 @@ elif page == "Watchlist":
         european_dataframe(watch_table, use_container_width=True, hide_index=True, row_height=34, column_config={
             "Order":st.column_config.NumberColumn(format="%.0f", width="small"),
             "Symbol":st.column_config.TextColumn(width="small"),
-            "Name":st.column_config.TextColumn(width="medium"),
+            "Name":st.column_config.TextColumn(width=150),
             "Currency":st.column_config.TextColumn(width="small"),
             "Price":st.column_config.NumberColumn(format="%.4f", width="small"),
             "Price change %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
-            "Price date / time":st.column_config.TextColumn(width="medium", help=f"Exchange price date and quote fetch time in {display_timezone}."),
+            "Price date / time":st.column_config.TextColumn(width=180, help=f"Exchange price date and quote fetch time in {display_timezone}."),
             "Status":st.column_config.TextColumn(width="small"),
-            "Note":st.column_config.TextColumn(width="medium"),
+            "Note":st.column_config.TextColumn(width=160),
         })
         st.download_button("Export watchlist CSV", watch_view.to_csv(index=False).encode("utf-8"), "investment_pilot_watchlist.csv", "text/csv")
         with st.expander("Change instrument order"):
@@ -1317,9 +1338,9 @@ elif page == "Watchlist":
             order_editor_data = order_editor_data.rename(columns={"ticker":"Symbol", "sort_order":"Order"})
             order_key = hashlib.sha1("|".join(watch["ticker"].astype(str)).encode("utf-8")).hexdigest()[:10]
             edited_order = st.data_editor(
-                order_editor_data, use_container_width=True, hide_index=True, key=f"watchlist_order_editor_{order_key}",
+                order_editor_data, use_container_width=False, hide_index=True, key=f"watchlist_order_editor_{order_key}",
                 column_config={
-                    "Symbol":st.column_config.TextColumn(disabled=True, width="medium"),
+                    "Symbol":st.column_config.TextColumn(disabled=True, width=110),
                     "Order":st.column_config.NumberColumn(min_value=1, step=1, format="%d", width="small"),
                 },
                 disabled=["Symbol"],
@@ -1437,7 +1458,7 @@ elif page == "Market analysis":
             "Price change %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
             "Period change %":st.column_config.NumberColumn(format="%+.2f%%", width="small"),
             "Volatility %":st.column_config.NumberColumn(format="%.2f%%", width="small"),
-            "Price date / time":st.column_config.TextColumn(width="medium", help=f"Latest daily observation date, then history cache fetch time in {display_timezone}."),
+            "Price date / time":st.column_config.TextColumn(width=180, help=f"Latest daily observation date, then history cache fetch time in {display_timezone}."),
         })
     st.subheader("Market moves that may affect ETF portfolios")
     st.markdown("**Rates:** changing yield expectations can affect bond prices and equity valuations. **FX:** a weaker foreign currency can reduce unhedged foreign-asset returns in PLN. **Equities:** broad index moves affect funds according to their underlying holdings and tracking. **Commodities:** the futures symbol may not match spot prices or a fund's return because of roll costs.")
@@ -1526,8 +1547,8 @@ elif page == "Data operations":
     st.subheader("Market-data cache")
     european_dataframe(pd.DataFrame(cache_rows), use_container_width=True, hide_index=True, row_height=34, column_config={
         "Data":st.column_config.TextColumn(width="small"),
-        "Coverage":st.column_config.TextColumn(width="medium"),
-        cache_updated_heading:st.column_config.TextColumn(width="medium"),
+        "Coverage":st.column_config.TextColumn(width=220),
+        cache_updated_heading:st.column_config.TextColumn(width=180),
     })
     st.subheader("Scheduled refresh history")
     runs = read_market_data_runs(50)
