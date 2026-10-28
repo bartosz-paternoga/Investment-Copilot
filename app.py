@@ -4,6 +4,8 @@ import json
 import hashlib
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from pathlib import Path
 from datetime import date
 
@@ -106,6 +108,8 @@ def _render_cookie_probe_timeout() -> None:
             return
         deadline = float(st.session_state.get("_auth_cookie_probe_deadline", 0.0))
         if time.monotonic() >= deadline:
+            st.session_state["_auth_cookie_probe_complete"] = True
+            st.session_state.pop("_auth_cookie_probe_pending", None)
             _clear_auth_transition_overlay()
             st.rerun()
 
@@ -259,31 +263,65 @@ user_key = str(_current_user["user_id"]) if _current_user is not None else "loca
 quote_bundle_key = (user_key, base_ccy, tuple(primary_quote_tickers), tuple(cash_currencies))
 
 
-def load_current_market_quotes(force_refresh: bool) -> pd.DataFrame:
+def load_current_market_quotes(
+    force_refresh: bool,
+    *,
+    cached_only: bool = False,
+    tickers=None,
+    currencies=None,
+    target_currency=None,
+) -> pd.DataFrame:
     """Load holdings/watchlist prices plus spot FX pairs needed for valuation."""
-    primary = get_quotes(primary_quote_tickers, force_refresh=force_refresh)
-    currencies = set(cash_currencies)
+    tickers = list(primary_quote_tickers if tickers is None else tickers)
+    currencies = set(cash_currencies if currencies is None else currencies)
+    target_currency = base_ccy if target_currency is None else target_currency
+    primary = get_quotes(tickers, force_refresh=force_refresh, cached_only=cached_only)
     if not primary.empty and "currency" in primary:
         currencies.update(primary["currency"].fillna("").astype(str).str.upper())
     bundle = primary
     missing_spot = {currency for currency in currencies
-                    if currency and fx_spot_rate_info(currency, base_ccy, bundle) is None}
-    direct_tickers = [symbol for symbol in fx_spot_pair_tickers(missing_spot, base_ccy)
-                      if symbol not in set(primary_quote_tickers)]
-    direct_quotes = get_quotes(direct_tickers, force_refresh=force_refresh)
+                    if currency and fx_spot_rate_info(currency, target_currency, bundle) is None}
+    direct_tickers = [symbol for symbol in fx_spot_pair_tickers(missing_spot, target_currency)
+                      if symbol not in set(tickers)]
+    direct_quotes = get_quotes(direct_tickers, force_refresh=force_refresh, cached_only=cached_only)
     if not direct_quotes.empty:
         bundle = pd.concat([bundle, direct_quotes], ignore_index=True).drop_duplicates("ticker", keep="last")
     missing_spot = {currency for currency in missing_spot
-                    if fx_spot_rate_info(currency, base_ccy, bundle) is None}
-    inverse_tickers = [symbol for symbol in fx_spot_pair_tickers(missing_spot, base_ccy, inverse=True)
-                       if symbol not in set(primary_quote_tickers)]
-    inverse_quotes = get_quotes(inverse_tickers, force_refresh=force_refresh)
+                    if fx_spot_rate_info(currency, target_currency, bundle) is None}
+    inverse_tickers = [symbol for symbol in fx_spot_pair_tickers(missing_spot, target_currency, inverse=True)
+                       if symbol not in set(tickers)]
+    inverse_quotes = get_quotes(inverse_tickers, force_refresh=force_refresh, cached_only=cached_only)
     if not inverse_quotes.empty:
         bundle = pd.concat([bundle, inverse_quotes], ignore_index=True).drop_duplicates("ticker", keep="last")
-    for currency in currencies:
-        if fx_spot_rate_info(currency, base_ccy, bundle) is None:
-            fx_rate_info(currency, base_ccy, force_refresh=force_refresh)
+    if not cached_only:
+        for currency in currencies:
+            if fx_spot_rate_info(currency, target_currency, bundle) is None:
+                fx_rate_info(currency, target_currency, force_refresh=force_refresh)
     return bundle
+
+
+@st.cache_resource
+def _market_refresh_executor():
+    """Share a small worker pool across Streamlit reruns in this process."""
+    return ThreadPoolExecutor(max_workers=2, thread_name_prefix="market-refresh")
+
+
+@st.fragment(run_every=0.5)
+def _poll_login_market_refresh():
+    future = st.session_state.get("_login_market_refresh_future")
+    if future is None or not future.done():
+        return
+    try:
+        refreshed_quotes = future.result()
+    except Exception as exc:
+        st.session_state["_login_market_refresh_error"] = str(exc)[:250]
+    else:
+        st.session_state.quotes = refreshed_quotes
+        st.session_state.quotes_for = st.session_state.get("_login_market_refresh_bundle_key", [])
+        st.session_state.last_refresh = pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")
+        st.session_state.pop("_login_market_refresh_error", None)
+    st.session_state["_login_market_refresh_future"] = None
+    st.rerun()
 
 if "quotes" not in st.session_state:
     st.session_state.quotes = None
@@ -315,6 +353,9 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     st.caption("Current prices and FX update at sign-in. Use this button to refresh them on any page; historical analyses refresh their daily data when recalculated. No trades are executed.")
+    market_refresh_error = st.session_state.get("_login_market_refresh_error")
+    if market_refresh_error:
+        st.warning("Automatic price/FX refresh failed. Saved prices are still shown; use the refresh button to try again.")
 
 if _current_user is not None:
     render_account_sidebar(st, _current_user)
@@ -323,15 +364,42 @@ if _current_user is not None:
 # The same bundle serves holdings and watchlist tables across every page.
 if refresh_on_login or st.session_state.quotes is None or st.session_state.quotes_for != quote_bundle_key:
     if primary_quote_tickers or cash_currencies:
-        with st.spinner("Updating latest available prices and current FX quotes…" if refresh_on_login else "Loading latest available prices and FX…"):
-            st.session_state.quotes = load_current_market_quotes(force_refresh=refresh_on_login)
+        if refresh_on_login:
+            # Show any saved quotes immediately. Fetch fresh provider data on a
+            # worker so a slow market-data response cannot hold the workspace
+            # behind the sign-in screen.
+            st.session_state.quotes = load_current_market_quotes(
+                force_refresh=False,
+                cached_only=True,
+                tickers=primary_quote_tickers,
+                currencies=cash_currencies,
+                target_currency=base_ccy,
+            )
             st.session_state.quotes_for = quote_bundle_key
-            st.session_state.last_refresh = pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")
+            st.session_state._market_data_login_key = login_refresh_key
+            refresh_context = copy_context()
+            st.session_state["_login_market_refresh_bundle_key"] = quote_bundle_key
+            st.session_state["_login_market_refresh_future"] = _market_refresh_executor().submit(
+                refresh_context.run,
+                load_current_market_quotes,
+                True,
+                tickers=tuple(primary_quote_tickers),
+                currencies=tuple(cash_currencies),
+                target_currency=base_ccy,
+            )
+        else:
+            with st.spinner("Loading latest available prices and FX…"):
+                st.session_state.quotes = load_current_market_quotes(force_refresh=False)
+                st.session_state.quotes_for = quote_bundle_key
+                st.session_state.last_refresh = pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")
     else:
         st.session_state.quotes = pd.DataFrame()
         st.session_state.quotes_for = quote_bundle_key
-    if refresh_on_login:
-        st.session_state._market_data_login_key = login_refresh_key
+        if refresh_on_login:
+            st.session_state._market_data_login_key = login_refresh_key
+
+if st.session_state.get("_login_market_refresh_future") is not None:
+    _poll_login_market_refresh()
 
 quotes = st.session_state.quotes if isinstance(st.session_state.quotes, pd.DataFrame) else pd.DataFrame()
 try:

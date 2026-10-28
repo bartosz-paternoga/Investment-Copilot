@@ -348,7 +348,8 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     cookie_probe_pending = st.session_state.pop("_auth_cookie_probe_pending", False)
     skip_cookie_once = st.session_state.pop("_auth_skip_cookie_once", False)
     session_token = st.session_state.get("auth_session_token")
-    if not session_token and not skip_cookie_once:
+    cookie_probe_complete = st.session_state.get("_auth_cookie_probe_complete", False)
+    if not session_token and not skip_cookie_once and not cookie_probe_complete:
         session_token = _request_session_cookie(st)
         if not session_token and not cookie_probe_pending and show_transition is not None:
             # Render the login form underneath a short cover while the browser
@@ -357,6 +358,15 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
             st.session_state["_auth_cookie_probe_pending"] = True
             st.session_state["_auth_cookie_probe_deadline"] = time.monotonic() + 1.5
             show_transition("Investment Copilot")
+            # Do not render a form that could be typed into while the cookie
+            # component is still initializing and about to trigger a rerun.
+            return None
+        elif not session_token and cookie_probe_pending:
+            # The browser component has had its chance to return a saved cookie.
+            # Remove it before rendering the form so a late mobile response cannot
+            # trigger a rerun while credentials are being entered.
+            st.session_state["_auth_cookie_probe_complete"] = True
+            st.rerun()
         elif session_token and cookie_probe_pending and show_transition is not None:
             # A saved cookie arrived on the follow-up component rerun. Keep the
             # login form covered while validating it and opening the workspace.

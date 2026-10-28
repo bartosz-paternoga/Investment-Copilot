@@ -939,11 +939,13 @@ QUOTE_COLUMNS = ["ticker", "name", "currency", "price", "previous_close", "day_c
 
 
 def get_quotes(
-    tickers: Iterable[str] | pd.DataFrame, *, force_refresh: bool = False, max_age_seconds: int = 21600
+    tickers: Iterable[str] | pd.DataFrame, *, force_refresh: bool = False,
+    max_age_seconds: int = 21600, cached_only: bool = False,
 ) -> pd.DataFrame:
     """Return quotes from a persistent TTL cache; refresh misses/expired symbols.
 
     `force_refresh=True` is used by the explicit UI refresh and scheduled worker.
+    `cached_only=True` returns any saved quote immediately without provider calls.
     The fetch timestamp is not represented as an exchange/live quote timestamp.
     """
     if isinstance(tickers, pd.DataFrame):
@@ -969,9 +971,9 @@ def get_quotes(
         except Exception:
             age = float("inf")
         ttl = int(max_age_seconds) if str(d.get("status", "")) != "Unavailable" else min(300, int(max_age_seconds))
-        if not force_refresh and age <= max(0, ttl):
+        if cached_only or (not force_refresh and age <= max(0, ttl)):
             cached[str(d["ticker"]).upper()] = d
-    to_fetch = [symbol for symbol in symbols if symbol not in cached]
+    to_fetch = [] if cached_only else [symbol for symbol in symbols if symbol not in cached]
     fresh_rows: dict[str, dict[str, Any]] = {}
     if to_fetch:
         fetched = _fetch_quotes_uncached(to_fetch)
