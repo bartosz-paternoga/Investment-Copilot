@@ -536,31 +536,33 @@ hr { border-color:var(--adatch-line); }
   .st-key-ai_portfolio_briefing_card, .st-key-ai_portfolio_question_card { gap:.35rem !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stVerticalBlockBorderWrapper"],
   .st-key-ai_portfolio_question_card [data-testid="stVerticalBlockBorderWrapper"] { padding:.65rem !important; }
-  .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:14px !important; line-height:1.25 !important; letter-spacing:-.01em !important; }
-  .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:12px !important; line-height:1.4 !important; }
-  .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:10px !important; line-height:1.3 !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:11px !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { height:72px !important; min-height:72px !important; padding:7px 8px !important; font-size:12px !important; line-height:1.35 !important; }
+  .st-key-ai_portfolio_intro h1 { font-size:26px !important; line-height:1.15 !important; letter-spacing:-.03em !important; margin-bottom:.35rem !important; }
+  .st-key-ai_portfolio_intro [data-testid="stCaptionContainer"] { font-size:13px !important; line-height:1.45 !important; }
+  .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:16px !important; line-height:1.3 !important; letter-spacing:-.015em !important; }
+  .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:13px !important; line-height:1.45 !important; }
+  .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:12px !important; line-height:1.4 !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:12px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { height:78px !important; min-height:78px !important; padding:8px 9px !important; font-size:13px !important; line-height:1.4 !important; }
   .st-key-ai_portfolio_question_card [data-testid="stForm"] { border:0 !important; padding:0 !important; }
   .st-key-ai_portfolio_briefing_card .stButton > button,
   .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button {
     display:inline-flex !important; align-items:center !important; justify-content:center !important;
-    box-sizing:border-box !important; width:86px !important; min-width:86px !important;
-    height:24px !important; min-height:24px !important; max-height:24px !important;
-    margin:0 !important; padding:0 6px !important; border:1px solid #64748b !important;
-    border-radius:6px !important; background:#64748b !important; background-color:#64748b !important;
+    box-sizing:border-box !important; width:108px !important; min-width:108px !important;
+    height:34px !important; min-height:34px !important; max-height:34px !important;
+    margin:0 !important; padding:0 10px !important; border:1px solid #64748b !important;
+    border-radius:8px !important; background:#64748b !important; background-color:#64748b !important;
     color:#fff !important; -webkit-text-fill-color:#fff !important;
-    font-family:inherit !important; font-size:9px !important; font-weight:600 !important;
-    line-height:1 !important; letter-spacing:0 !important; text-transform:none !important;
+    font-family:inherit !important; font-size:12px !important; font-weight:650 !important;
+    line-height:1.1 !important; letter-spacing:0 !important; text-transform:none !important;
     box-shadow:none !important; transform:none !important;
   }
   .st-key-ai_portfolio_briefing_card .stButton > button *,
   .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button * {
     margin:0 !important; padding:0 !important; color:#fff !important;
     -webkit-text-fill-color:#fff !important; font-family:inherit !important;
-    font-size:9px !important; font-weight:600 !important; line-height:1 !important; opacity:1 !important;
+    font-size:12px !important; font-weight:650 !important; line-height:1.1 !important; opacity:1 !important;
   }
-  .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:9px !important; line-height:1.3 !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:11px !important; line-height:1.4 !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2168,10 +2170,11 @@ elif page == "Market analysis":
     st.caption("This screen currently charts market proxies. It does not automatically attribute every move to a confirmed news catalyst.")
 
 elif page == "AI Analyst":
-    st.title("AI portfolio analyst")
-    st.caption("Build an evidence-based briefing or ask a separate question about your portfolio.")
-    api_key, model, key_source = _openrouter_settings()
-    st.caption(f"AI provider: OpenRouter · model: {model} · API key: {key_source}")
+    with st.container(key="ai_portfolio_intro"):
+        st.title("AI portfolio analyst")
+        st.caption("Build an evidence-based briefing or ask a separate question about your portfolio.")
+        api_key, model, key_source = _openrouter_settings()
+        st.caption(f"AI provider: OpenRouter · model: {model} · API key: {key_source}")
 
     with st.container(key="ai_portfolio_briefing_card"):
         st.subheader("Portfolio briefing")

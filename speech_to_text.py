@@ -44,16 +44,16 @@ _CSS = """
 .controls button:disabled { cursor:not-allowed; opacity:.5; }
 #dictation-status { flex:1 1 100%; min-width:0; margin:0; color:#758195; font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
 @media (max-width:600px) {
-  .dictation { font-size:10px !important; }
+  .dictation { font-size:12px !important; }
   .controls { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; }
   .language-control { gap:6px; }
-  .language-control label { font-size:9px !important; }
-  .language-control select { flex:0 0 110px; width:110px; max-width:110px; min-height:24px; padding:2px 6px; border-radius:6px; font-size:10px !important; }
-  .actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; width:268px; max-width:100%; }
+  .language-control label { font-size:12px !important; }
+  .language-control select { flex:0 0 124px; width:124px; max-width:124px; min-height:30px; padding:3px 7px; border-radius:7px; font-size:12px !important; }
+  .actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; width:100%; max-width:330px; }
   .secondary-actions { display:contents; }
-  .controls button { width:100% !important; min-width:0; min-height:24px; padding:2px 4px; border-radius:6px; font-size:9px !important; line-height:1.1; }
+  .controls button { width:100% !important; min-width:0; min-height:32px; padding:4px 6px; border-radius:8px; font-size:11px !important; line-height:1.15; }
   #dictation-start { flex:none; }
-  #dictation-status { font-size:9px !important; line-height:1.3; }
+  #dictation-status { font-size:11px !important; line-height:1.4; }
 }
 """
 
