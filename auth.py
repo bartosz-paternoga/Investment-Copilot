@@ -226,23 +226,33 @@ def _cookie_manager(st):
 
 
 def _set_auth_cookie(
-    st, token: str, expires_at: datetime
+    st, token: str, expires_at: datetime, *, persistent: bool
 ) -> None:
-    """Set the browser cookie without a Streamlit component-value rerun."""
+    """Set a session or persistent cookie without a component-value rerun."""
     import streamlit.components.v1 as components
 
     cookie_name = json.dumps(_SESSION_COOKIE_NAME)
     cookie_value = json.dumps(token)
     expires = json.dumps(expires_at.isoformat())
+    persistent_json = json.dumps(bool(persistent))
     components.html(
         f"""<!doctype html>
         <script>
         try {{
             const name = {cookie_name};
             const value = {cookie_value};
-            const expires = new Date({expires}).toUTCString();
-            document.cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
-                `Path=/; Expires=${{expires}}; Secure; SameSite=Lax`;
+            const persistent = {persistent_json};
+            const cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
+                `Path=/; Secure; SameSite=Lax`;
+            if (persistent) {{
+                const expires = new Date({expires}).toUTCString();
+                document.cookie = cookie + `; Expires=${{expires}}`;
+            }} else {{
+                // Replace any older remembered cookie with a true browser-
+                // session cookie. No Expires/Max-Age means it ends at session close.
+                document.cookie = `${{encodeURIComponent(name)}}=; Path=/; Max-Age=0; Secure; SameSite=Lax`;
+                document.cookie = cookie;
+            }}
         }} catch (error) {{}}
         </script>""",
         height=0,
@@ -430,7 +440,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 "Stay signed in on this device (30 days)",
                 value=False,
                 key="login_stay_signed_in",
-                help="When unchecked, sign-in lasts up to 12 hours. When checked, it lasts up to 30 days.",
+                help="When unchecked, the browser-session cookie ends when you close the browser and the server session expires after 12 hours. When checked, the sign-in persists for up to 30 days.",
             )
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
@@ -467,7 +477,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 "deadline": time.monotonic() + 15,
             }
             try:
-                _set_auth_cookie(st, token, expires_at)
+                _set_auth_cookie(st, token, expires_at, persistent=stay_signed_in)
             except Exception:
                 LOGGER.exception("Could not request the browser session-cookie write.")
                 revoke_auth_session(token)
