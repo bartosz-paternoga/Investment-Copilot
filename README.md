@@ -1,6 +1,8 @@
 # Investment Copilot
 
-A polished personal ETF portfolio workspace built with Python, Streamlit, Pandas and Plotly. Investment Copilot supports local SQLite development and hosted PostgreSQL deployments with administrator-provisioned accounts and per-user data schemas. It includes holdings, portfolio snapshots, benchmark comparisons, risk analytics and ETF research.
+**An AI-assisted portfolio analyst and ETF research workspace.** Build dated, evidence-based portfolio briefings, ask questions about your holdings, and explore sourced ETF look-through exposures, concentration risks and market stress scenarios. Portfolio figures and scenario calculations are computed by the app; optional AI commentary is grounded in the supplied facts and source references.
+
+Built with Python, Streamlit, Pandas and Plotly. Investment Copilot supports local SQLite development and hosted PostgreSQL deployments with administrator-provisioned accounts and per-user data schemas. It also includes holdings, portfolio snapshots, benchmark comparisons, risk analytics and ETF research.
 
 **Current version: 1.3.3** — semantic version recorded in `VERSION`; see `CHANGELOG.md` for release notes.
 
@@ -17,6 +19,7 @@ A polished personal ETF portfolio workspace built with Python, Streamlit, Pandas
 - Manual valuation snapshots and CSV ledger exports.
 
 ### Terminal and analytics
+- **AI Portfolio Analyst:** create dated portfolio briefings and ask follow-up questions about holdings, company exposures, ETF overlap, concentration and currency risks. Measured facts, source dates, data gaps and mechanical stress calculations come from the app; AI commentary is optional and must cite the supplied evidence.
 - Light, wide-layout investor dashboard with allocation, daily move estimates, holdings table and data-status warnings.
 - Performance workspace with adjusted-close ETF total-return index, reporting-currency conversion, selectable benchmarks, relative return, annualized return/volatility, drawdown and linked ticker contributions.
 - Separate approximate money-weighted XIRR using recorded transaction flows.
@@ -88,7 +91,11 @@ ETF_MARKET_DATA_EXTRA_TICKERS=^GSPC,^STOXX50E,^IXIC
 
 Create the local environment file if needed (`cp .env.example .env`), then run `docker compose up -d --build`. This starts both the terminal and the background worker and shares the same persistent volume. Do not run two workers against the same database unless that is intentional; SQLite supports concurrent access, but duplicate refresh jobs waste provider requests.
 
-## Optional AI analyst
+## AI portfolio analyst and portfolio Q&A
+
+The AI Analyst turns portfolio and sourced ETF holdings data into a dated briefing, then lets you ask follow-up questions in plain language. It is designed to distinguish measured portfolio facts from risks and uncertain scenarios, include source references, and call out missing evidence rather than fill gaps with guesses. The app calculates portfolio values, exposure shares and mechanical stress examples locally; the AI adds commentary to those calculations.
+
+The AI feature is optional. Without a configured provider key, portfolio tracking and the rest of the analytics continue to work; AI briefings and questions are unavailable.
 
 For the local app, add the key to `.env`:
 
