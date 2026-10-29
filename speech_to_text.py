@@ -49,9 +49,9 @@ _CSS = """
   .language-control { gap:6px; }
   .language-control label { font-size:12px !important; }
   .language-control select { flex:0 0 124px; width:124px; max-width:124px; min-height:30px; padding:3px 7px; border-radius:7px; font-size:12px !important; }
-  .actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; width:100%; max-width:330px; }
+  .actions { display:grid; grid-template-columns:repeat(auto-fit,108px); gap:6px; width:336px; max-width:100%; }
   .secondary-actions { display:contents; }
-  .controls button { width:100% !important; min-width:0; min-height:32px; padding:4px 6px; border-radius:8px; font-size:11px !important; line-height:1.15; }
+  .controls button { box-sizing:border-box; width:108px !important; min-width:108px; height:36px; min-height:36px; max-height:36px; padding:4px 6px; border-radius:8px; font-size:12px !important; font-weight:650; line-height:1.1; }
   #dictation-start { flex:none; }
   #dictation-status { font-size:11px !important; line-height:1.4; }
 }

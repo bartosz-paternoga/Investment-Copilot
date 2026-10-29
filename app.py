@@ -548,7 +548,7 @@ hr { border-color:var(--adatch-line); }
   .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button {
     display:inline-flex !important; align-items:center !important; justify-content:center !important;
     box-sizing:border-box !important; width:108px !important; min-width:108px !important;
-    height:34px !important; min-height:34px !important; max-height:34px !important;
+    height:36px !important; min-height:36px !important; max-height:36px !important;
     margin:0 !important; padding:0 10px !important; border:1px solid #64748b !important;
     border-radius:8px !important; background:#64748b !important; background-color:#64748b !important;
     color:#fff !important; -webkit-text-fill-color:#fff !important;
