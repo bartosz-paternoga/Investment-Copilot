@@ -31,18 +31,18 @@ _HTML = """
 """
 
 _CSS = """
-.dictation { width:100%; margin:0; color:#263445; font-family:inherit; font-size:14px; }
+.dictation { width:100%; margin:0; color:#263445; font-family:inherit; font-size:12px; }
 .controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; }
 .language-control { display:flex; align-items:center; gap:6px; min-width:0; }
-.language-control label { flex:0 0 auto; color:#687586; font-size:14px; }
-.language-control select { box-sizing:border-box; flex:0 0 136px; width:136px; max-width:136px; min-width:136px; height:40px; min-height:40px; padding:3px 7px; border:1px solid #d5dce4; border-radius:8px; background:#fff; color:#263445; font:inherit; font-size:14px; }
+.language-control label { flex:0 0 auto; color:#687586; font-size:12px; }
+.language-control select { box-sizing:border-box; flex:0 0 108px; width:108px; max-width:108px; min-width:108px; height:36px; min-height:36px; max-height:36px; padding:3px 6px; border:1px solid #d5dce4; border-radius:8px; background:#fff; color:#263445; font:inherit; font-size:12px; }
 .actions { display:flex; flex:0 1 auto; align-items:center; gap:5px; min-width:0; }
 .secondary-actions { display:flex; align-items:center; gap:5px; }
-.controls button { box-sizing:border-box; width:136px; min-width:136px; height:40px; min-height:40px; max-height:40px; padding:4px 9px; border:1px solid #d5dce4; border-radius:8px; background:#fff; color:#344256; font:inherit; font-size:14px; font-weight:650; line-height:1.1; cursor:pointer; white-space:nowrap; }
-#dictation-start { border-color:#64748b; background:#64748b; color:#fff; font-weight:600; }
+.controls button { box-sizing:border-box; width:108px; min-width:108px; height:36px; min-height:36px; max-height:36px; padding:4px 6px; border:1px solid #d5dce4; border-radius:8px; background:#fff; color:#344256; font:inherit; font-size:12px; font-weight:650; line-height:1.1; cursor:pointer; white-space:nowrap; }
+#dictation-start { border-color:#64748b; background:#64748b; color:#fff; font-weight:650; }
 #dictation-start:hover { border-color:#475569; background:#475569; }
 .controls button:disabled { cursor:not-allowed; opacity:.5; }
-#dictation-status { flex:1 1 100%; min-width:0; margin:0; color:#758195; font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
+#dictation-status { flex:1 1 100%; min-width:0; margin:0; color:#758195; font-size:12px; line-height:1.4; overflow-wrap:anywhere; }
 @media (max-width:600px) {
   .dictation { font-size:12px !important; }
   .controls { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; }

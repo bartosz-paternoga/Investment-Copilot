@@ -533,12 +533,13 @@ hr { border-color:var(--adatch-line); }
 [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) h3 { font-size:1.15rem !important; line-height:1.3 !important; }
 [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) p,
 [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) li { font-size:.9rem; line-height:1.5; }
+[data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) [data-testid="stTextArea"] label { font-size:.85rem; font-weight:600; }
 .st-key-ai_portfolio_briefing_card .stButton > button,
 .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button {
-  box-sizing:border-box !important; width:136px !important; min-width:136px !important;
-  height:40px !important; min-height:40px !important; max-height:40px !important;
-  padding:0 12px !important; border-radius:8px !important;
-  font-family:inherit !important; font-size:14px !important; font-weight:650 !important; line-height:1.1 !important;
+  box-sizing:border-box !important; width:108px !important; min-width:108px !important;
+  height:36px !important; min-height:36px !important; max-height:36px !important;
+  padding:0 10px !important; border-radius:8px !important;
+  font-family:inherit !important; font-size:12px !important; font-weight:650 !important; line-height:1.1 !important;
 }
 @media (max-width: 850px) {
   [data-testid="stMainBlockContainer"] { padding-left:.75rem; padding-right:.75rem; }
@@ -579,7 +580,7 @@ hr { border-color:var(--adatch-line); }
     -webkit-text-fill-color:#fff !important; font-family:inherit !important;
     font-size:12px !important; font-weight:650 !important; line-height:1.1 !important; opacity:1 !important;
   }
-  .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:11px !important; line-height:1.4 !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:12px !important; line-height:1.4 !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2196,7 +2197,7 @@ elif page == "AI Analyst":
     with st.container(key="ai_portfolio_briefing_card"):
         st.subheader("Portfolio briefing")
         st.caption("Dated facts, risks, stress scenario and missing data.")
-        briefing_clicked = st.button("Build briefing", type="primary", key="build_ai_portfolio_briefing", width="content")
+        briefing_clicked = st.button("Build briefing", type="primary", key="build_ai_portfolio_briefing", width=108)
 
     with st.container(border=True, key="ai_portfolio_question_card"):
         st.subheader("Ask a question about your portfolio")
@@ -2229,7 +2230,7 @@ elif page == "AI Analyst":
                 height=68,
                 key="ai_portfolio_question",
             )
-            ask_question_clicked = st.form_submit_button("Ask AI", type="primary", width="content")
+            ask_question_clicked = st.form_submit_button("Ask AI", type="primary", width=108)
         st.caption(
             "Browser speech service · Clear removes your question"
         )
