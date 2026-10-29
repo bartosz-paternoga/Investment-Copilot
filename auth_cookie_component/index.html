@@ -21,6 +21,9 @@
           sendToStreamlit("streamlit:setFrameHeight", { height }),
       };
 
+      const PERSISTENT_STORAGE_KEY = "investment_copilot_auth_persistent";
+      const TAB_STORAGE_KEY = "investment_copilot_auth_tab";
+
       const readCookie = (cookieDocument, name) => {
         const prefix = `${encodeURIComponent(name)}=`;
         const entry = cookieDocument.cookie
@@ -35,6 +38,32 @@
         }
       };
 
+      const readStoredSession = (appWindow) => {
+        let persistent = "";
+        let tab = "";
+        try {
+          const record = JSON.parse(
+            appWindow.localStorage.getItem(PERSISTENT_STORAGE_KEY) || "null"
+          );
+          if (record && typeof record.token === "string") {
+            const expiresAt = Number(record.expiresAt || 0);
+            if (!expiresAt || expiresAt > Date.now()) {
+              persistent = record.token;
+            } else {
+              appWindow.localStorage.removeItem(PERSISTENT_STORAGE_KEY);
+            }
+          }
+        } catch (_error) {
+          // The session cookie remains a compatibility fallback.
+        }
+        try {
+          tab = appWindow.sessionStorage.getItem(TAB_STORAGE_KEY) || "";
+        } catch (_error) {
+          // The session cookie remains a compatibility fallback.
+        }
+        return { persistent, tab };
+      };
+
       let lastCommand = "";
       const render = (event) => {
         if (event.data?.type !== "streamlit:render") return;
@@ -47,11 +76,13 @@
         const action = String(args.action || "get");
         const secure = args.secure !== false;
         let value = "";
+        let storage = "";
+        let errorMessage = "";
 
         try {
-          // Read and write the top-level app's cookie jar explicitly. A cookie
-          // written only in the component iframe can appear successful there
-          // but be absent from the app's next page request.
+          // Read and write storage on the top-level app origin. Streamlit
+          // components run in iframes, so checking only the component's own
+          // storage can falsely confirm a token that disappears on reload.
           const appWindow = window.top;
           const cookieDocument = appWindow.document;
           if (appWindow.location.origin !== window.location.origin) {
@@ -59,35 +90,79 @@
           }
 
           if (name && action === "set") {
-            const attributes = ["Path=/", "SameSite=Lax"];
-            if (secure) attributes.push("Secure");
+            const token = String(args.cookie_value || "");
             if (args.expires_at) {
-              const expires = new Date(args.expires_at);
-              if (Number.isNaN(expires.getTime())) {
-                throw new Error("Invalid authentication-cookie expiry");
+              const expiresAt = new Date(args.expires_at).getTime();
+              if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+                throw new Error("Invalid sign-in expiry");
               }
-              attributes.push(`Expires=${expires.toUTCString()}`);
+              appWindow.localStorage.setItem(
+                PERSISTENT_STORAGE_KEY,
+                JSON.stringify({ token, expiresAt })
+              );
+              try {
+                appWindow.sessionStorage.removeItem(TAB_STORAGE_KEY);
+              } catch (_error) {
+                // Persistent storage remains authoritative for this login.
+              }
+              storage = "persistent";
+            } else {
+              appWindow.sessionStorage.setItem(TAB_STORAGE_KEY, token);
+              try {
+                appWindow.localStorage.removeItem(PERSISTENT_STORAGE_KEY);
+              } catch (_error) {
+                // The just-written tab token is still usable in this session.
+              }
+              storage = "tab";
             }
-            cookieDocument.cookie =
-              `${encodeURIComponent(name)}=${encodeURIComponent(String(args.cookie_value || ""))}; ` +
-              attributes.join("; ");
-            value = readCookie(cookieDocument, name);
+
+            // Keep a first-party cookie as a compatibility path. The app's
+            // session restore does not depend on the cookie reaching the
+            // Streamlit websocket request; it reads the verified storage value.
+            try {
+              const attributes = ["Path=/", "SameSite=Lax"];
+              if (secure) attributes.push("Secure");
+              if (args.expires_at) {
+                attributes.push(`Expires=${new Date(args.expires_at).toUTCString()}`);
+              }
+              cookieDocument.cookie =
+                `${encodeURIComponent(name)}=${encodeURIComponent(token)}; ` +
+                attributes.join("; ");
+            } catch (_error) {
+              // Browser storage is the authoritative session persistence.
+            }
+            const saved = readStoredSession(appWindow);
+            value = storage === "persistent" ? saved.persistent : saved.tab;
+            if (value !== token) throw new Error("Browser storage did not confirm the sign-in");
           } else if (name && action === "delete") {
+            appWindow.localStorage.removeItem(PERSISTENT_STORAGE_KEY);
+            appWindow.sessionStorage.removeItem(TAB_STORAGE_KEY);
             cookieDocument.cookie =
               `${encodeURIComponent(name)}=; Path=/; Max-Age=0; SameSite=Lax` +
               (secure ? "; Secure" : "");
             value = readCookie(cookieDocument, name);
           } else if (name && action === "get") {
-            value = readCookie(cookieDocument, name);
+            const saved = readStoredSession(appWindow);
+            if (saved.persistent) {
+              value = saved.persistent;
+              storage = "persistent";
+            } else if (saved.tab) {
+              value = saved.tab;
+              storage = "tab";
+            } else {
+              value = readCookie(cookieDocument, name);
+              storage = value ? "cookie" : "";
+            }
           }
-          Streamlit.setComponentValue({ ready: true, value, error: "" });
         } catch (error) {
-          Streamlit.setComponentValue({
-            ready: true,
-            value: "",
-            error: String(error && error.message ? error.message : error),
-          });
+          errorMessage = String(error && error.message ? error.message : error);
         }
+        Streamlit.setComponentValue({
+          ready: true,
+          value,
+          storage,
+          error: errorMessage,
+        });
         Streamlit.setFrameHeight(0);
       };
 

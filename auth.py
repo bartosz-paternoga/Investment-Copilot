@@ -205,16 +205,7 @@ def _auth_cookie_component(**kwargs):
 
 
 def _request_session_cookie(st) -> str | None:
-    """Read the session token and mark whether the browser probe has answered."""
-    try:
-        request_cookies = st.context.cookies
-    except Exception:
-        request_cookies = None
-    token = request_cookies.get(_SESSION_COOKIE_NAME) if request_cookies is not None else None
-    if token:
-        st.session_state["_auth_cookie_probe_ready"] = True
-        return str(token)
-
+    """Read the browser-held token, falling back to the incoming cookie."""
     try:
         result = _auth_cookie_component(
             action="get",
@@ -226,15 +217,27 @@ def _request_session_cookie(st) -> str | None:
         )
     except Exception:
         LOGGER.exception("Could not read the browser authentication cookie.")
-        st.session_state["_auth_cookie_probe_ready"] = True
-        return None
+        result = None
 
     ready = isinstance(result, dict) and result.get("ready") is True
     st.session_state["_auth_cookie_probe_ready"] = ready
-    if not ready:
-        return None
-    token = result.get("value")
-    return str(token) if token else None
+    if ready:
+        token = result.get("value")
+        if token:
+            return str(token)
+
+    # Streamlit Community Cloud can omit JavaScript-written cookies from a
+    # websocket request. This fallback supports sessions created before the
+    # browser-storage handoff was introduced and ordinary server-visible cookies.
+    try:
+        request_cookies = st.context.cookies
+        token = request_cookies.get(_SESSION_COOKIE_NAME) if request_cookies is not None else None
+    except Exception:
+        token = None
+    if token:
+        st.session_state["_auth_cookie_probe_ready"] = True
+        return str(token)
+    return None
 
 def _set_auth_cookie(
     st, token: str, expires_at: datetime, *, persistent: bool
@@ -382,13 +385,17 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 st.caption("Completing sign-in…")
             return None
 
-        if cookie_result.get("value") != pending_token:
+        expected_storage = "persistent" if pending_login.get("persistent") else "tab"
+        if (
+            cookie_result.get("value") != pending_token
+            or cookie_result.get("storage") != expected_storage
+        ):
             revoke_auth_session(pending_token)
             st.session_state.pop("_auth_pending_login", None)
-            cookie_error = (
-                "Your browser did not save the sign-in session. Allow cookies for this site, "
-                "then sign in again."
-            )
+            detail = str(cookie_result.get("error") or "")[:180]
+            cookie_error = "Your browser did not save the sign-in session. Allow site storage and try again."
+            if detail:
+                cookie_error += f" Browser detail: {detail}"
         else:
             current = load_auth_session(pending_token)
             if current:
@@ -420,6 +427,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
     if session_token and not current:
         st.session_state.pop("auth_session_token", None)
         st.session_state.pop("auth_user_id", None)
+        _delete_auth_cookie(st, "auth_cookie_invalid_session")
     if current and session_token:
         st.session_state["auth_session_token"] = session_token
         st.session_state["auth_user_id"] = current["user_id"]
@@ -469,7 +477,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 "Stay signed in on this device (30 days)",
                 value=False,
                 key="login_stay_signed_in",
-                help="When unchecked, sign-in lasts for this browser session (up to 12 hours) and survives page refreshes. When checked, it persists on this device for up to 30 days.",
+                help="When unchecked, sign-in lasts in this tab's browser session (up to 12 hours) and survives refreshes. When checked, it persists on this device for up to 30 days.",
             )
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
