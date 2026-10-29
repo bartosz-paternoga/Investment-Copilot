@@ -256,4 +256,6 @@ def _portfolio_question_dictation_component(version: int):
 
 def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
-    return _portfolio_question_dictation_component(7)(**kwargs)
+    # Bump this version whenever the embedded HTML/CSS/JS changes so Streamlit
+    # registers a fresh component bundle instead of reusing the old frontend.
+    return _portfolio_question_dictation_component(8)(**kwargs)
