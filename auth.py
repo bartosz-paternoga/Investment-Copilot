@@ -350,7 +350,7 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
             )
 
 
-def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
+def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
     auth_screen = st.empty()
     # Read cookies opportunistically, but never gate the login form on the
@@ -360,8 +360,6 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     session_token = st.session_state.get("auth_session_token")
     if not session_token and not skip_cookie_once:
         session_token = _request_session_cookie(st)
-        if session_token and show_transition is not None:
-            show_transition("Opening your portfolio…")
 
     # CookieManager reports its browser-side set result by triggering one more
     # Streamlit run. Reuse the account already verified by password auth during
@@ -438,16 +436,12 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
 
     if submitted:
-        st.session_state["_auth_transition_loading"] = True
-        if show_transition is not None:
-            show_transition()
         # Set up the bootstrap account only when someone actually submits the
         # form. Database DDL during an ordinary page open delayed the login
         # screen and made cookie-check failures look like a blank page.
         if not st.session_state.get("_bootstrap_checked", False):
             bootstrap_message = ensure_bootstrap_admin()
             if bootstrap_message and not bootstrap_message.startswith("Created bootstrap administrator"):
-                st.session_state["_auth_transition_loading"] = False
                 st.error(bootstrap_message)
                 return None
             st.session_state["_bootstrap_checked"] = True
@@ -480,14 +474,12 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                 st.session_state.pop("auth_session_token", None)
                 st.session_state.pop("auth_user_id", None)
                 st.session_state.pop("_auth_login_transition", None)
-                st.session_state["_auth_transition_loading"] = False
                 st.error("Could not establish the browser session. Please refresh and try again.")
             else:
                 # Continue into the app in this run instead of showing the old
                 # login form while a second full portfolio run is starting.
                 auth_screen.empty()
                 if user["must_change_password"]:
-                    st.session_state["_auth_transition_loading"] = False
                     with auth_screen.container():
                         st.title("Investment Copilot")
                         st.caption("Private investment workspace · administrator-provisioned accounts")
@@ -501,7 +493,6 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
                 return user
         else:
             LOGGER.warning("Password check rejected.")
-            st.session_state["_auth_transition_loading"] = False
             st.error("Sign-in failed. Check your credentials or contact the administrator.")
     return None
 

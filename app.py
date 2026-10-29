@@ -48,6 +48,9 @@ try:
 except OSError:
     APP_VERSION = "dev"
 st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+# Clear the root slot used by the old sign-in splash before any other page
+# output. Streamlit can retain that delta briefly when reusing a browser session.
+st.empty().empty()
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
 def _cached_issuer_holdings(fund_ticker: str, isin: str = "") -> dict:
@@ -442,47 +445,8 @@ def _briefing_response_issue(answer: str, payload: dict) -> str:
         return refs_error
     return ""
 
-# Reset legacy cookie-probe flags once. Cookie lookup no longer gates login.
-_AUTH_FLOW_VERSION = "login-visible-cookie-optional-8"
-if st.session_state.get("_auth_flow_version") != _AUTH_FLOW_VERSION:
-    for _auth_state_key in (
-        "_auth_cookie_probe_pending",
-        "_auth_cookie_probe_deadline",
-        "_auth_cookie_probe_complete",
-        "_auth_transition_loading",
-    ):
-        st.session_state.pop(_auth_state_key, None)
-    st.session_state["_auth_flow_version"] = _AUTH_FLOW_VERSION
-
 LOGGER = logging.getLogger("investment_copilot")
 LOGGER.info("Application modules loaded (version %s).", APP_VERSION)
-
-_auth_transition_overlay = st.empty()
-_auth_transition_overlay_visible = bool(
-    st.session_state.get("_auth_transition_loading", False)
-)
-
-
-def _clear_auth_transition_overlay() -> None:
-    global _auth_transition_overlay_visible
-    _auth_transition_overlay.empty()
-    _auth_transition_overlay_visible = False
-    st.session_state["_auth_transition_loading"] = False
-
-
-def _show_auth_transition_overlay(message="Opening your portfolio…") -> None:
-    global _auth_transition_overlay_visible
-    _auth_transition_overlay_visible = True
-    st.session_state["_auth_transition_loading"] = True
-    # Use a native Streamlit element here. A fixed, full-screen HTML overlay
-    # can hide the whole page if its markup is delayed or fails to hydrate in
-    # the browser during a cold start; this status remains visible and does
-    # not cover the login form or workspace.
-    _auth_transition_overlay.info(str(message), icon="⏳")
-
-
-if _auth_transition_overlay_visible:
-    _show_auth_transition_overlay()
 
 
 # A restrained steel/slate palette keeps charts consistent with the neutral UI.
@@ -578,14 +542,12 @@ hr { border-color:var(--adatch-line); }
 _current_user = None
 if database_url():
     try:
-        _current_user = render_auth_gate(st, show_transition=_show_auth_transition_overlay)
+        _current_user = render_auth_gate(st)
     except Exception:
         LOGGER.exception("Authentication gate failed during app startup or sign-in.")
-        _clear_auth_transition_overlay()
         st.error("The managed PostgreSQL database could not be reached or initialized. Check DATABASE_URL, database availability, and required permissions in Streamlit Secrets.")
         st.stop()
     if _current_user is None:
-        _clear_auth_transition_overlay()
         st.stop()
     try:
         set_active_tenant_schema(_current_user["tenant_schema"])
@@ -2710,11 +2672,3 @@ elif page == "Methodology & data":
     st.code('OPENROUTER_API_KEY=""\nOPENROUTER_MODEL=openrouter/free', language="dotenv")
     st.subheader("Database backup")
     st.write("The database defaults to `data/portfolio.sqlite3`. The online backup script `./scripts/backup_db.sh` uses SQLite's backup API, including when WAL is enabled. Keep backups outside version control and test restoring a copy. Export transactions to CSV from the Transactions page for a readable ledger copy.")
-
-# Replace the transition message in place after rendering instead of clearing
-# its root placeholder. This keeps Streamlit from dropping the first app frame
-# while it reconciles the post-login layout.
-if _auth_transition_overlay_visible:
-    _auth_transition_overlay.success("Portfolio ready", icon="✅")
-    _auth_transition_overlay_visible = False
-    st.session_state["_auth_transition_loading"] = False
