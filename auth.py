@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import re
@@ -228,35 +227,32 @@ def _cookie_manager(st):
 def _set_auth_cookie(
     st, token: str, expires_at: datetime, *, persistent: bool
 ) -> None:
-    """Persist a token only when requested; otherwise remove any old cookie."""
-    import streamlit.components.v1 as components
+    """Write the app token through the same browser component used to read it.
 
-    cookie_name = json.dumps(_SESSION_COOKIE_NAME)
-    cookie_value = json.dumps(token)
-    expires = json.dumps(expires_at.isoformat())
-    persistent_json = json.dumps(bool(persistent))
-    components.html(
-        f"""<!doctype html>
-        <script>
-        try {{
-            const name = {cookie_name};
-            const value = {cookie_value};
-            const persistent = {persistent_json};
-            if (persistent) {{
-                const expires = new Date({expires}).toUTCString();
-                document.cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
-                    `Path=/; Expires=${{expires}}; Secure; SameSite=Lax`;
-            }} else {{
-                // Remove any old remembered cookie, then keep this token only
-                // for the browser session so a page refresh can restore login.
-                document.cookie = `${{encodeURIComponent(name)}}=; Path=/; Max-Age=0; Secure; SameSite=Lax`;
-                document.cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
-                    `Path=/; Secure; SameSite=Lax`;
-            }}
-        }} catch (error) {{}}
-        </script>""",
-        height=0,
-        scrolling=False,
+    A standalone HTML component runs in its own iframe context. Its
+    ``document.cookie`` write was not reliably visible to the app's cookie
+    reader on Streamlit Community Cloud, which made a refresh look like a
+    logout. The cookie-manager component writes in the app's cookie context.
+    Omitting ``expires`` creates a browser-session cookie; persistent sign-in
+    receives the server-side session expiry.
+    """
+    from extra_streamlit_components.CookieManager import _component_func
+
+    options: dict[str, Any] = {
+        "path": "/",
+        "secure": True,
+        "sameSite": "lax",
+    }
+    if persistent:
+        options["expires"] = expires_at.isoformat()
+
+    _component_func(
+        method="set",
+        cookie=_SESSION_COOKIE_NAME,
+        value=token,
+        options=options,
+        key="auth_cookie_set",
+        default=False,
     )
 
 
