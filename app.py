@@ -539,11 +539,27 @@ hr { border-color:var(--adatch-line); }
   .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:14px !important; line-height:1.25 !important; letter-spacing:-.01em !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:12px !important; line-height:1.4 !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:10px !important; line-height:1.3 !important; }
-  .st-key-ai_portfolio_briefing_card .stButton > button { width:86px !important; min-height:24px !important; padding:.15rem .35rem !important; border-radius:6px !important; font-size:9px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:11px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { height:72px !important; min-height:72px !important; padding:7px 8px !important; font-size:12px !important; line-height:1.35 !important; }
   .st-key-ai_portfolio_question_card [data-testid="stForm"] { border:0 !important; padding:0 !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { width:86px !important; min-height:24px !important; padding:.15rem .35rem !important; border-radius:6px !important; font-size:9px !important; }
+  .st-key-ai_portfolio_briefing_card .stButton > button,
+  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button {
+    display:inline-flex !important; align-items:center !important; justify-content:center !important;
+    box-sizing:border-box !important; width:86px !important; min-width:86px !important;
+    height:24px !important; min-height:24px !important; max-height:24px !important;
+    margin:0 !important; padding:0 6px !important; border:1px solid #64748b !important;
+    border-radius:6px !important; background:#64748b !important; background-color:#64748b !important;
+    color:#fff !important; -webkit-text-fill-color:#fff !important;
+    font-family:inherit !important; font-size:9px !important; font-weight:600 !important;
+    line-height:1 !important; letter-spacing:0 !important; text-transform:none !important;
+    box-shadow:none !important; transform:none !important;
+  }
+  .st-key-ai_portfolio_briefing_card .stButton > button *,
+  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button * {
+    margin:0 !important; padding:0 !important; color:#fff !important;
+    -webkit-text-fill-color:#fff !important; font-family:inherit !important;
+    font-size:9px !important; font-weight:600 !important; line-height:1 !important; opacity:1 !important;
+  }
   .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:9px !important; line-height:1.3 !important; }
 }
 </style>
