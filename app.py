@@ -256,10 +256,11 @@ def _openrouter_chat(
             # schema; the app cannot safely trust free-form uncited prose.
             request_body["response_format"] = response_format
             request_body["provider"] = {"require_parameters": True}
-        # openrouter/free can select a reasoning model (as it did here).
-        # Bound that model's thinking effort so it leaves room for visible text.
+        # openrouter/free can select a reasoning model, and reasoning tokens
+        # count against max_tokens even when excluded from the returned text.
+        # Disable reasoning so the output budget is available for the cited answer.
         if model == "openrouter/free":
-            request_body["reasoning"] = {"effort": "low", "exclude": True}
+            request_body["reasoning"] = {"effort": "none", "exclude": True}
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
