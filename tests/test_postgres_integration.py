@@ -84,7 +84,9 @@ class PostgreSQLTenantPoolIntegrationTests(unittest.TestCase):
             for _ in range(pool_size):
                 raw = pool.getconn(timeout=10)
                 checked_out.append(raw)
-                schemas = raw.execute("SELECT current_schemas(false)").fetchone()[0]
+                schemas = raw.execute(
+                    "SELECT current_schemas(false) AS schemas"
+                ).fetchone()["schemas"]
                 leaked = set(schemas).intersection(self._schemas)
                 self.assertFalse(leaked, f"A pooled connection retained tenant search_path: {leaked}")
         finally:
@@ -172,7 +174,9 @@ class PostgreSQLTenantPoolIntegrationTests(unittest.TestCase):
         with psycopg.connect(self.dsn) as con:
             for schema, owner in ((self.schema_a, "user_a"), (self.schema_b, "user_b")):
                 rows = con.execute(
-                    f'SELECT owner, count(*) FROM "{schema}".pool_isolation_probe GROUP BY owner'
+                    f'SELECT owner, count(*) FROM "{schema}".pool_isolation_probe '
+                    "WHERE iteration >= 0 AND iteration < %s GROUP BY owner",
+                    (iterations,),
                 ).fetchall()
                 self.assertEqual(rows, [(owner, iterations + 1)])
 
