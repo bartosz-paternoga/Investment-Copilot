@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import secrets
-import time
 import uuid
 from typing import Any
 from contextlib import contextmanager
@@ -22,6 +21,7 @@ _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,40}$")
 _SESSION_COOKIE_NAME = "investment_copilot_session"
 _SHORT_SESSION_HOURS = 12
 _REMEMBER_SESSION_DAYS = 30
+_AUTH_COOKIE_COMPONENT = None
 
 
 def _setting(name: str, default: str = "") -> str:
@@ -190,81 +190,75 @@ def revoke_auth_session(token: str | None) -> None:
         )
 
 
-def _request_session_cookie(st, *, browser_result_only: bool = False) -> str | None:
-    """Read the session token from the request or the browser cookie component."""
+def _auth_cookie_component(**kwargs):
+    """Run the small first-party component that reads/writes our auth cookie."""
+    global _AUTH_COOKIE_COMPONENT
+    if _AUTH_COOKIE_COMPONENT is None:
+        from pathlib import Path
+        import streamlit.components.v1 as components
+
+        _AUTH_COOKIE_COMPONENT = components.declare_component(
+            "investment_copilot_auth_cookie",
+            path=str(Path(__file__).with_name("auth_cookie_component")),
+        )
+    return _AUTH_COOKIE_COMPONENT(height=0, **kwargs)
+
+
+def _request_session_cookie(st) -> str | None:
+    """Read the session token and mark whether the browser probe has answered."""
     try:
-        # Streamlit's request snapshot is available in the supported versions.
         request_cookies = st.context.cookies
     except Exception:
         request_cookies = None
     token = request_cookies.get(_SESSION_COOKIE_NAME) if request_cookies is not None else None
     if token:
+        st.session_state["_auth_cookie_probe_ready"] = True
         return str(token)
 
-    # A completed CookieManager call is already stored under its Streamlit key.
-    # Read that result directly on the follow-up run instead of mounting the
-    # browser component again beside the login form.
-    if browser_result_only:
-        cookies = st.session_state.get("auth_cookie_manager")
-        token = cookies.get(_SESSION_COOKIE_NAME) if isinstance(cookies, dict) else None
-        return str(token) if token else None
-
-    # Streamlit Community Cloud may filter cookies from the initial request.
-    # Read from the browser component whenever the request has no session token.
     try:
-        token = _cookie_manager(st).get(_SESSION_COOKIE_NAME)
-        return str(token) if token else None
+        result = _auth_cookie_component(
+            action="get",
+            cookie_name=_SESSION_COOKIE_NAME,
+            cookie_value="",
+            expires_at="",
+            key="auth_cookie_probe",
+            default=None,
+        )
     except Exception:
+        LOGGER.exception("Could not read the browser authentication cookie.")
+        st.session_state["_auth_cookie_probe_ready"] = True
         return None
 
-def _cookie_manager(st):
-    """Return the cookie component for the current script run."""
-    import extra_streamlit_components as stx
-
-    return stx.CookieManager(key="auth_cookie_manager")
-
+    ready = isinstance(result, dict) and result.get("ready") is True
+    st.session_state["_auth_cookie_probe_ready"] = ready
+    if not ready:
+        return None
+    token = result.get("value")
+    return str(token) if token else None
 
 def _set_auth_cookie(
     st, token: str, expires_at: datetime, *, persistent: bool
-) -> None:
-    """Write the app token through the same browser component used to read it.
-
-    A standalone HTML component runs in its own iframe context. Its
-    ``document.cookie`` write was not reliably visible to the app's cookie
-    reader on Streamlit Community Cloud, which made a refresh look like a
-    logout. The cookie-manager component writes in the app's cookie context.
-    Omitting ``expires`` creates a browser-session cookie; persistent sign-in
-    receives the server-side session expiry.
-    """
-    from extra_streamlit_components.CookieManager import _component_func
-
-    options: dict[str, Any] = {
-        "path": "/",
-        "secure": True,
-        "sameSite": "lax",
-    }
-    if persistent:
-        options["expires"] = expires_at.isoformat()
-
-    _component_func(
-        method="set",
-        cookie=_SESSION_COOKIE_NAME,
-        value=token,
-        options=options,
-        key="auth_cookie_set",
-        default=False,
+) -> dict[str, Any] | None:
+    """Write the token and return the browser's read-back confirmation."""
+    return _auth_cookie_component(
+        action="set",
+        cookie_name=_SESSION_COOKIE_NAME,
+        cookie_value=token,
+        expires_at=expires_at.isoformat() if persistent else "",
+        key=f"auth_cookie_set_{_session_token_hash(token)[:12]}",
+        default=None,
     )
 
 
 def _delete_auth_cookie(st, key: str) -> bool:
     try:
-        from extra_streamlit_components.CookieManager import _component_func
-
-        _component_func(
-            method="delete",
-            cookie=_SESSION_COOKIE_NAME,
+        _auth_cookie_component(
+            action="delete",
+            cookie_name=_SESSION_COOKIE_NAME,
+            cookie_value="",
+            expires_at="",
             key=f"{key}_delete",
-            default=False,
+            default=None,
         )
         return True
     except Exception:
@@ -359,33 +353,70 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
 def render_auth_gate(st) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
     auth_screen = st.empty()
-    # Read cookies opportunistically, but never gate the login form on the
-    # browser component returning. Streamlit Cloud can delay that response;
-    # the form must remain usable while it is in flight.
-    skip_cookie_once = st.session_state.pop("_auth_skip_cookie_once", False)
-    session_token = st.session_state.get("auth_session_token")
-    if not session_token and not skip_cookie_once:
-        session_token = _request_session_cookie(st)
+    cookie_error = None
 
-    # CookieManager reports its browser-side set result by triggering one more
-    # Streamlit run. Reuse the account already verified by password auth during
-    # that single handoff, then require normal server-session validation again.
-    login_transition = st.session_state.get("_auth_login_transition")
-    transition_user = None
-    if session_token and isinstance(login_transition, dict):
-        transition_hash = str(login_transition.get("token_hash", ""))
-        transition_deadline = float(login_transition.get("deadline", 0.0))
-        if (
-            transition_hash
-            and hmac.compare_digest(transition_hash, _session_token_hash(session_token))
-            and time.monotonic() <= transition_deadline
-        ):
-            candidate = login_transition.get("user")
-            if isinstance(candidate, dict):
-                transition_user = candidate
-    if transition_user is None:
-        st.session_state.pop("_auth_login_transition", None)
-    current = transition_user or (load_auth_session(session_token) if session_token else None)
+    # Do not enter the app until the browser component confirms that its cookie
+    # write is visible to the browser. The previous flow trusted the password
+    # check and entered the app before the asynchronous cookie write completed.
+    pending_login = st.session_state.get("_auth_pending_login")
+    session_token = None
+    current = None
+    if isinstance(pending_login, dict):
+        pending_token = str(pending_login.get("token", ""))
+        try:
+            pending_expiry = datetime.fromisoformat(str(pending_login["expires_at"]))
+            cookie_result = _set_auth_cookie(
+                st,
+                pending_token,
+                pending_expiry,
+                persistent=bool(pending_login.get("persistent")),
+            )
+        except Exception:
+            LOGGER.exception("Could not complete the browser authentication-cookie write.")
+            cookie_result = {"ready": True, "value": ""}
+
+        if not isinstance(cookie_result, dict) or cookie_result.get("ready") is not True:
+            with auth_screen.container():
+                st.title("Investment Copilot")
+                st.caption("Private investment workspace · administrator-provisioned accounts")
+                st.caption("Completing sign-in…")
+            return None
+
+        if cookie_result.get("value") != pending_token:
+            revoke_auth_session(pending_token)
+            st.session_state.pop("_auth_pending_login", None)
+            cookie_error = (
+                "Your browser did not save the sign-in session. Allow cookies for this site, "
+                "then sign in again."
+            )
+        else:
+            current = load_auth_session(pending_token)
+            if current:
+                session_token = pending_token
+                st.session_state["auth_session_token"] = pending_token
+                st.session_state["auth_user_id"] = current["user_id"]
+                st.session_state.pop("_auth_pending_login", None)
+            else:
+                st.session_state.pop("_auth_pending_login", None)
+                cookie_error = "The sign-in session expired before it could be opened. Please sign in again."
+    else:
+        skip_cookie_once = st.session_state.pop("_auth_skip_cookie_once", False)
+        session_token = st.session_state.get("auth_session_token")
+        if not session_token and not skip_cookie_once:
+            session_token = _request_session_cookie(st)
+        elif skip_cookie_once:
+            st.session_state["_auth_cookie_probe_ready"] = True
+
+        if session_token:
+            current = load_auth_session(session_token)
+
+        if not session_token and not st.session_state.get("_auth_cookie_probe_ready", False):
+            with auth_screen.container():
+                st.title("Investment Copilot")
+                st.caption("Private investment workspace · administrator-provisioned accounts")
+                st.caption("Checking this browser for an active sign-in…")
+            return None
+
     if session_token and not current:
         st.session_state.pop("auth_session_token", None)
         st.session_state.pop("auth_user_id", None)
@@ -429,6 +460,8 @@ def render_auth_gate(st) -> dict[str, Any] | None:
     with auth_screen.container():
         st.title("Investment Copilot")
         st.caption("Private investment workspace · administrator-provisioned accounts")
+        if cookie_error:
+            st.error(cookie_error)
         with st.form("login_form"):
             username = st.text_input("Username", autocomplete="username")
             password = st.text_input("Password", type="password", autocomplete="current-password")
@@ -455,48 +488,25 @@ def render_auth_gate(st) -> dict[str, Any] | None:
         if user:
             LOGGER.info("Password check accepted; creating an app session.")
             token, expires_at = create_auth_session(user["user_id"], stay_signed_in)
-            # Save the verified session before mounting the browser cookie
-            # component. Its response can cause an immediate Streamlit rerun;
-            # that rerun must already have enough state to stay authenticated.
-            st.session_state["auth_session_token"] = token
-            st.session_state["auth_user_id"] = user["user_id"]
-            st.session_state["_auth_login_transition"] = {
-                "token_hash": _session_token_hash(token),
-                "user": {
-                    key: user[key]
-                    for key in (
-                        "user_id", "username", "display_name", "email", "role",
-                        "tenant_schema", "active", "must_change_password",
-                    )
-                    if key in user
-                },
-                "deadline": time.monotonic() + 15,
+            st.session_state["_auth_pending_login"] = {
+                "token": token,
+                "expires_at": expires_at.isoformat(),
+                "persistent": stay_signed_in,
             }
             try:
                 _set_auth_cookie(st, token, expires_at, persistent=stay_signed_in)
             except Exception:
                 LOGGER.exception("Could not request the browser session-cookie write.")
                 revoke_auth_session(token)
-                st.session_state.pop("auth_session_token", None)
-                st.session_state.pop("auth_user_id", None)
-                st.session_state.pop("_auth_login_transition", None)
+                st.session_state.pop("_auth_pending_login", None)
                 st.error("Could not establish the browser session. Please refresh and try again.")
             else:
-                # Continue into the app in this run instead of showing the old
-                # login form while a second full portfolio run is starting.
                 auth_screen.empty()
-                if user["must_change_password"]:
-                    with auth_screen.container():
-                        st.title("Investment Copilot")
-                        st.caption("Private investment workspace · administrator-provisioned accounts")
-                        st.subheader("Set your password")
-                        st.warning("Your administrator issued a temporary password. Choose a new password to continue.")
-                        with st.form("required_password_change"):
-                            password_1 = st.text_input("New password", type="password")
-                            password_2 = st.text_input("Confirm new password", type="password")
-                            submit = st.form_submit_button("Save password", type="primary")
-                    return None
-                return user
+                with auth_screen.container():
+                    st.title("Investment Copilot")
+                    st.caption("Private investment workspace · administrator-provisioned accounts")
+                    st.caption("Completing sign-in…")
+                return None
         else:
             LOGGER.warning("Password check rejected.")
             st.error("Sign-in failed. Check your credentials or contact the administrator.")

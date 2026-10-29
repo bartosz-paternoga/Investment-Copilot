@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Authentication cookie</title>
+    <script>
+      const sendToStreamlit = (type, data = {}) => {
+        window.parent.postMessage(
+          { isStreamlitMessage: true, type, ...data },
+          "*"
+        );
+      };
+
+      const Streamlit = {
+        setComponentReady: () =>
+          sendToStreamlit("streamlit:componentReady", { apiVersion: 1 }),
+        setComponentValue: (value) =>
+          sendToStreamlit("streamlit:setComponentValue", { value }),
+        setFrameHeight: (height) =>
+          sendToStreamlit("streamlit:setFrameHeight", { height }),
+      };
+
+      const readCookie = (name) => {
+        const prefix = `${encodeURIComponent(name)}=`;
+        const entry = document.cookie
+          .split(";")
+          .map((part) => part.trim())
+          .find((part) => part.startsWith(prefix));
+        if (!entry) return "";
+        try {
+          return decodeURIComponent(entry.slice(prefix.length));
+        } catch (_error) {
+          return entry.slice(prefix.length);
+        }
+      };
+
+      let lastCommand = "";
+      const render = (event) => {
+        if (event.data?.type !== "streamlit:render") return;
+        const args = event.data.args || {};
+        const command = JSON.stringify(args);
+        if (command === lastCommand) return;
+        lastCommand = command;
+
+        const name = String(args.cookie_name || "");
+        const action = String(args.action || "get");
+        const secure = args.secure !== false;
+        let value = "";
+
+        if (name && action === "set") {
+          const attributes = ["Path=/", "SameSite=Lax"];
+          if (secure) attributes.push("Secure");
+          if (args.expires_at) {
+            const expires = new Date(args.expires_at);
+            if (!Number.isNaN(expires.getTime())) {
+              attributes.push(`Expires=${expires.toUTCString()}`);
+            }
+          }
+          document.cookie =
+            `${encodeURIComponent(name)}=${encodeURIComponent(String(args.cookie_value || ""))}; ` +
+            attributes.join("; ");
+          value = readCookie(name);
+        } else if (name && action === "delete") {
+          document.cookie =
+            `${encodeURIComponent(name)}=; Path=/; Max-Age=0; SameSite=Lax` +
+            (secure ? "; Secure" : "");
+          value = readCookie(name);
+        } else if (name && action === "get") {
+          value = readCookie(name);
+        }
+
+        Streamlit.setComponentValue({ ready: true, value });
+        Streamlit.setFrameHeight(0);
+      };
+
+      window.addEventListener("message", render);
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(0);
+    </script>
+  </head>
+  <body></body>
+</html>
