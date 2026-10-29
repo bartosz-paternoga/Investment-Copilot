@@ -544,6 +544,31 @@ hr { border-color:var(--adatch-line); }
 }
 @media (max-width: 850px) {
   [data-testid="stMainBlockContainer"] { padding-left:.75rem; padding-right:.75rem; }
+  /* Keep the sidebar page button and its pin control on one compact row.
+     Streamlit stacks narrow columns on phones by default, which separated
+     every pin icon from its page and doubled the navigation height. */
+  [data-testid="stSidebar"] > div:first-child { padding-top:.65rem; }
+  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap:.4rem !important; }
+  [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
+    display:flex !important; flex-flow:row nowrap !important; align-items:center !important;
+    gap:6px !important; width:100% !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:first-child {
+    flex:1 1 0 !important; width:auto !important; min-width:0 !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:last-child {
+    flex:0 0 36px !important; width:36px !important; min-width:36px !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stButton"] { margin:0 !important; }
+  [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stButton"] button {
+    box-sizing:border-box !important; min-height:38px !important; height:38px !important;
+    padding:5px 10px !important; border-radius:9px !important; font-size:14px !important;
+    line-height:1.2 !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:last-child button {
+    padding:4px 2px !important; font-size:17px !important;
+  }
+  [data-testid="stSidebar"] hr { margin:.55rem 0 !important; }
   .portfolio-hero { align-items:flex-start; flex-direction:column; gap:12px; }
   .portfolio-hero > div:first-child { flex-basis:auto; width:100%; }
   .portfolio-hero .hero-badge { white-space:normal; }
