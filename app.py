@@ -1386,11 +1386,12 @@ elif page == "Investments":
         if len(snaps) >= 2:
             chart_range = st.radio("Period", ["All available", "1M", "3M", "6M", "1Y"], horizontal=True, label_visibility="collapsed", key="quick_chart_range")
             snap_view = snaps.copy()
-            snap_view["as_of"] = pd.to_datetime(snap_view["as_of"], errors="coerce")
+            snap_view["as_of"] = pd.to_datetime(snap_view["as_of"], errors="coerce", utc=True)
             snap_view = snap_view.dropna(subset=["as_of"])
             days = {"1M":30,"3M":90,"6M":180,"1Y":365}.get(chart_range)
             if days:
-                snap_view = snap_view[snap_view["as_of"] >= (pd.Timestamp.now() - pd.Timedelta(days=days))]
+                cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+                snap_view = snap_view[snap_view["as_of"] >= cutoff]
             if len(snap_view) >= 2:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=snap_view["as_of"], y=snap_view["market_value"], mode="lines", line=dict(color="#64748b", width=2.6), fill="tozeroy", fillcolor="rgba(100,116,139,0.11)", name="Portfolio value", hovertemplate="%{x|%d %b %Y}<br>%{y:,.2f} " + base_ccy + "<extra></extra>"))
