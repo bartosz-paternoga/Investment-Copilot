@@ -21,9 +21,9 @@
           sendToStreamlit("streamlit:setFrameHeight", { height }),
       };
 
-      const readCookie = (name) => {
+      const readCookie = (cookieDocument, name) => {
         const prefix = `${encodeURIComponent(name)}=`;
-        const entry = document.cookie
+        const entry = cookieDocument.cookie
           .split(";")
           .map((part) => part.trim())
           .find((part) => part.startsWith(prefix));
@@ -48,29 +48,46 @@
         const secure = args.secure !== false;
         let value = "";
 
-        if (name && action === "set") {
-          const attributes = ["Path=/", "SameSite=Lax"];
-          if (secure) attributes.push("Secure");
-          if (args.expires_at) {
-            const expires = new Date(args.expires_at);
-            if (!Number.isNaN(expires.getTime())) {
+        try {
+          // Read and write the top-level app's cookie jar explicitly. A cookie
+          // written only in the component iframe can appear successful there
+          // but be absent from the app's next page request.
+          const appWindow = window.top;
+          const cookieDocument = appWindow.document;
+          if (appWindow.location.origin !== window.location.origin) {
+            throw new Error("Authentication component is not on the app origin");
+          }
+
+          if (name && action === "set") {
+            const attributes = ["Path=/", "SameSite=Lax"];
+            if (secure) attributes.push("Secure");
+            if (args.expires_at) {
+              const expires = new Date(args.expires_at);
+              if (Number.isNaN(expires.getTime())) {
+                throw new Error("Invalid authentication-cookie expiry");
+              }
               attributes.push(`Expires=${expires.toUTCString()}`);
             }
+            cookieDocument.cookie =
+              `${encodeURIComponent(name)}=${encodeURIComponent(String(args.cookie_value || ""))}; ` +
+              attributes.join("; ");
+            value = readCookie(cookieDocument, name);
+          } else if (name && action === "delete") {
+            cookieDocument.cookie =
+              `${encodeURIComponent(name)}=; Path=/; Max-Age=0; SameSite=Lax` +
+              (secure ? "; Secure" : "");
+            value = readCookie(cookieDocument, name);
+          } else if (name && action === "get") {
+            value = readCookie(cookieDocument, name);
           }
-          document.cookie =
-            `${encodeURIComponent(name)}=${encodeURIComponent(String(args.cookie_value || ""))}; ` +
-            attributes.join("; ");
-          value = readCookie(name);
-        } else if (name && action === "delete") {
-          document.cookie =
-            `${encodeURIComponent(name)}=; Path=/; Max-Age=0; SameSite=Lax` +
-            (secure ? "; Secure" : "");
-          value = readCookie(name);
-        } else if (name && action === "get") {
-          value = readCookie(name);
+          Streamlit.setComponentValue({ ready: true, value, error: "" });
+        } catch (error) {
+          Streamlit.setComponentValue({
+            ready: true,
+            value: "",
+            error: String(error && error.message ? error.message : error),
+          });
         }
-
-        Streamlit.setComponentValue({ ready: true, value });
         Streamlit.setFrameHeight(0);
       };
 
