@@ -35,7 +35,7 @@ _CSS = """
 .controls { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem .65rem; }
 .language-control { display:flex; align-items:center; gap:.5rem; min-width:0; }
 .language-control label { flex:0 0 auto; color:#556274; font-size:.85rem; }
-.language-control select { flex:0 1 auto; width:150px; min-width:120px; min-height:36px; padding:.35rem .6rem; border:1px solid #cbd3dc; border-radius:8px; background:#fff; color:#263445; font:inherit; font-size:.9rem; }
+.language-control select { flex:0 0 150px; width:150px; max-width:150px; min-width:120px; min-height:36px; padding:.35rem .6rem; border:1px solid #cbd3dc; border-radius:8px; background:#fff; color:#263445; font:inherit; font-size:.9rem; }
 .actions { display:flex; flex:0 1 auto; align-items:center; gap:.4rem; min-width:0; }
 .secondary-actions { display:flex; align-items:center; gap:.4rem; }
 .controls button { width:auto; min-width:0; min-height:36px; padding:.38rem .7rem; border:1px solid #d1d8e0; border-radius:8px; background:#fff; color:#344256; font:inherit; font-size:.88rem; line-height:1.2; cursor:pointer; white-space:nowrap; }
@@ -46,7 +46,7 @@ _CSS = """
 @media (max-width:600px) {
   .controls { gap:.45rem .55rem; }
   .language-control { flex:1 1 100%; }
-  .language-control select { width:auto; min-width:140px; max-width:190px; min-height:36px; font-size:16px; }
+  .language-control select { flex:0 0 auto; width:auto; min-width:140px; max-width:170px; min-height:36px; font-size:16px; }
   .actions { flex:1 1 100%; gap:.35rem; }
   #dictation-start { flex:1 1 auto; }
   .secondary-actions { gap:.35rem; }
@@ -254,4 +254,4 @@ def _portfolio_question_dictation_component(version: int):
 
 def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
-    return _portfolio_question_dictation_component(2)(**kwargs)
+    return _portfolio_question_dictation_component(3)(**kwargs)
