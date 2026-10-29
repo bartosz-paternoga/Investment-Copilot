@@ -31,27 +31,29 @@ _HTML = """
 """
 
 _CSS = """
-.dictation { width:100%; margin:.1rem 0 .35rem; color:#263445; font-family:inherit; }
-.controls { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem .65rem; }
-.language-control { display:flex; align-items:center; gap:.5rem; min-width:0; }
-.language-control label { flex:0 0 auto; color:#556274; font-size:.85rem; }
-.language-control select { flex:0 0 150px; width:150px; max-width:150px; min-width:120px; min-height:36px; padding:.35rem .6rem; border:1px solid #cbd3dc; border-radius:8px; background:#fff; color:#263445; font:inherit; font-size:.9rem; }
-.actions { display:flex; flex:0 1 auto; align-items:center; gap:.4rem; min-width:0; }
-.secondary-actions { display:flex; align-items:center; gap:.4rem; }
-.controls button { width:auto; min-width:0; min-height:36px; padding:.38rem .7rem; border:1px solid #d1d8e0; border-radius:8px; background:#fff; color:#344256; font:inherit; font-size:.88rem; line-height:1.2; cursor:pointer; white-space:nowrap; }
+.dictation { width:100%; margin:0; color:#263445; font-family:inherit; font-size:12px; }
+.controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; }
+.language-control { display:flex; align-items:center; gap:6px; min-width:0; }
+.language-control label { flex:0 0 auto; color:#687586; font-size:11px; }
+.language-control select { flex:0 0 132px; width:132px; max-width:132px; min-width:0; min-height:30px; padding:3px 7px; border:1px solid #d5dce4; border-radius:7px; background:#fff; color:#263445; font:inherit; font-size:12px; }
+.actions { display:flex; flex:0 1 auto; align-items:center; gap:5px; min-width:0; }
+.secondary-actions { display:flex; align-items:center; gap:5px; }
+.controls button { width:auto; min-width:0; min-height:30px; padding:4px 9px; border:1px solid #d5dce4; border-radius:7px; background:#fff; color:#344256; font:inherit; font-size:12px; line-height:1.15; cursor:pointer; white-space:nowrap; }
 #dictation-start { border-color:#64748b; background:#64748b; color:#fff; font-weight:600; }
 #dictation-start:hover { border-color:#475569; background:#475569; }
 .controls button:disabled { cursor:not-allowed; opacity:.5; }
-#dictation-status { flex:1 1 100%; min-width:0; margin-top:.05rem; color:#758195; font-size:.78rem; line-height:1.35; overflow-wrap:anywhere; }
+#dictation-status { flex:1 1 100%; min-width:0; margin:0; color:#758195; font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
 @media (max-width:600px) {
-  .controls { gap:.45rem .55rem; }
-  .language-control { flex:1 1 100%; }
-  .language-control select { flex:0 0 auto; width:auto; min-width:140px; max-width:170px; min-height:36px; font-size:16px; }
-  .actions { flex:1 1 100%; gap:.35rem; }
-  #dictation-start { flex:1 1 auto; }
-  .secondary-actions { gap:.35rem; }
-  .controls button { min-height:36px; padding:.4rem .65rem; font-size:14px; }
-  #dictation-status { font-size:12px; }
+  .dictation { font-size:11px; }
+  .controls { gap:6px; }
+  .language-control { flex:0 0 auto; }
+  .language-control select { flex-basis:125px; width:125px; max-width:125px; min-height:28px; padding:3px 6px; font-size:12px; }
+  .actions { flex:1 1 100%; gap:5px; }
+  .secondary-actions { gap:5px; }
+  .controls button { min-height:28px; padding:4px 7px; font-size:11px; }
+  #dictation-start { flex:0 0 auto; }
+  #dictation-stop { padding-left:8px; padding-right:8px; }
+  #dictation-status { font-size:10px; }
 }
 """
 
@@ -254,4 +256,4 @@ def _portfolio_question_dictation_component(version: int):
 
 def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
-    return _portfolio_question_dictation_component(3)(**kwargs)
+    return _portfolio_question_dictation_component(4)(**kwargs)

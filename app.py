@@ -527,6 +527,7 @@ div[data-testid="stDataFrame"] { border:1px solid var(--adatch-line); border-rad
 .stButton > button:disabled, [data-testid="stFormSubmitButton"] button:disabled { background:#edf1f4 !important; color:#8a96a3 !important; border-color:#e1e7ec !important; -webkit-text-fill-color:#8a96a3 !important; }
 .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] { width:auto !important; }
 .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { width:auto !important; min-height:2.25rem; padding:.42rem .85rem; font-size:.9rem !important; }
+.st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { margin:0 0 .25rem !important; }
 [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input, [data-testid="stDateInput"] input, [data-testid="stSelectbox"] div[data-baseweb="select"] > div, [data-testid="stTextArea"] textarea { border-radius:10px; }
 [data-testid="stAlert"] { border-radius:12px; }
 [data-testid="stCaptionContainer"] { color:#8591a0; }
@@ -537,6 +538,17 @@ hr { border-color:var(--adatch-line); }
   .portfolio-hero > div:first-child { flex-basis:auto; width:100%; }
   .portfolio-hero .hero-badge { white-space:normal; }
   .hero-badge { align-self:flex-start; }
+  .st-key-ai_portfolio_briefing_card, .st-key-ai_portfolio_question_card { gap:.45rem !important; }
+  .st-key-ai_portfolio_briefing_card [data-testid="stVerticalBlockBorderWrapper"],
+  .st-key-ai_portfolio_question_card [data-testid="stVerticalBlockBorderWrapper"] { padding:.65rem !important; }
+  .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:15px !important; line-height:1.25 !important; letter-spacing:-.01em !important; }
+  .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:12px !important; line-height:1.4 !important; }
+  .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:11px !important; line-height:1.35 !important; }
+  .st-key-ai_portfolio_briefing_card .stButton > button { width:max-content !important; min-height:32px !important; padding:.35rem .7rem !important; font-size:12px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:12px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { min-height:72px !important; padding:8px 9px !important; font-size:13px !important; line-height:1.4 !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { min-height:30px !important; padding:.32rem .7rem !important; font-size:12px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:10px !important; line-height:1.35 !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2149,10 +2161,10 @@ elif page == "AI Analyst":
     api_key, model, key_source = _openrouter_settings()
     st.caption(f"AI provider: OpenRouter · model: {model} · API key: {key_source}")
 
-    with st.container(border=True):
+    with st.container(border=True, key="ai_portfolio_briefing_card"):
         st.subheader("Portfolio briefing")
-        st.write("Creates the full dated snapshot, measured facts, risks, stress scenario and missing-data summary.")
-        briefing_clicked = st.button("Build portfolio briefing", type="primary", key="build_ai_portfolio_briefing")
+        st.caption("Creates a dated snapshot of facts, risks, stress scenario and missing data.")
+        briefing_clicked = st.button("Build portfolio briefing", type="primary", key="build_ai_portfolio_briefing", width="content")
 
     with st.container(border=True, key="ai_portfolio_question_card"):
         st.subheader("Ask a question about your portfolio")
