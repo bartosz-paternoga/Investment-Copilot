@@ -424,39 +424,11 @@ def _clear_auth_transition_overlay() -> None:
 def _show_auth_transition_overlay(message="Opening your portfolio…") -> None:
     global _auth_transition_overlay_visible
     _auth_transition_overlay_visible = True
-    markup = """
-        <style>
-        #auth-transition-overlay {
-            position: fixed;
-            inset: 0;
-            z-index: 2147483647;
-            display: grid;
-            place-content: center;
-            justify-items: center;
-            gap: 14px;
-            background: #f4f6f8;
-            color: #475569;
-            font: 600 16px/1.4 sans-serif;
-        }
-        #auth-transition-spinner {
-            width: 34px;
-            height: 34px;
-            border: 3px solid #d9e2eb;
-            border-top-color: #64748b;
-            border-radius: 50%;
-            animation: auth-transition-spin .8s linear infinite;
-        }
-        @keyframes auth-transition-spin {
-            to { transform: rotate(360deg); }
-        }
-        </style>
-        <div id="auth-transition-overlay" role="status" aria-live="polite">
-            <div id="auth-transition-spinner"></div>
-            <div>__OVERLAY_MESSAGE__</div>
-        </div>
-        """
-    markup = markup.replace("__OVERLAY_MESSAGE__", message)
-    _auth_transition_overlay.markdown(markup, unsafe_allow_html=True)
+    # Use a native Streamlit element here. A fixed, full-screen HTML overlay
+    # can hide the whole page if its markup is delayed or fails to hydrate in
+    # the browser during a cold start; this status remains visible and does
+    # not cover the login form or workspace.
+    _auth_transition_overlay.info(str(message), icon="⏳")
 
 
 if _auth_transition_overlay_visible:
