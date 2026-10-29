@@ -178,7 +178,7 @@ class PostgreSQLTenantPoolIntegrationTests(unittest.TestCase):
                     "WHERE iteration >= 0 AND iteration < %s GROUP BY owner",
                     (iterations,),
                 ).fetchall()
-                self.assertEqual(rows, [(owner, iterations + 1)])
+                self.assertEqual(rows, [(owner, iterations)])
 
         self._assert_no_tenant_search_path_on_idle_pool_connection()
 
