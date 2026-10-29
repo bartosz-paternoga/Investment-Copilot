@@ -445,7 +445,7 @@ def _briefing_response_issue(answer: str, payload: dict) -> str:
 # A failed cookie-probe fragment can leave its transient flags in an existing
 # browser session after a code update. Reset only those flags once so the new
 # app run can show the login form or restore the browser cookie normally.
-_AUTH_FLOW_VERSION = "cookie-probe-stable-form-6"
+_AUTH_FLOW_VERSION = "cookie-probe-app-rerun-7"
 if st.session_state.get("_auth_flow_version") != _AUTH_FLOW_VERSION:
     for _auth_state_key in (
         "_auth_cookie_probe_pending",
@@ -497,9 +497,10 @@ def _render_cookie_probe_timeout() -> None:
         if time.monotonic() >= deadline:
             st.session_state["_auth_cookie_probe_complete"] = True
             st.session_state.pop("_auth_cookie_probe_pending", None)
-            # Rerun the full app. Keep fragment reruns away from the overlay
-            # container, which is created outside this fragment.
-            st.rerun()
+            # The auth gate stopped the parent app while this timer waited.
+            # Resume that full app run explicitly; rerunning only this fragment
+            # leaves the login page stopped and the browser blank.
+            st.rerun(scope="app")
 
     cookie_probe_timeout()
 
