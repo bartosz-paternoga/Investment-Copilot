@@ -20,6 +20,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from database import database_url, set_active_tenant_schema
 from auth import render_auth_gate, render_account_sidebar
+import portfolio as portfolio_store
 
 from portfolio import (
     add_transaction, add_watchlist_ticker, build_portfolio, delete_transaction, fx_rate, fx_rate_info, get_history, get_quotes,
@@ -27,7 +28,6 @@ from portfolio import (
     initialize_db, list_instruments, list_transactions, list_watchlist, portfolio_metrics, read_snapshots,
     remove_watchlist_ticker, save_instrument, save_snapshot, simulate_forecast, transaction_types_summary,
     replace_quick_position, remove_ticker_from_portfolio,
-    get_preferred_start_page, set_preferred_start_page,
     resolve_position_currency,
     get_fx_history, get_history_fetch_times, save_etf_holdings, list_etf_holdings, read_market_data_runs, market_data_cache_summary,
 )
@@ -617,10 +617,51 @@ else:
 
 PAGES = ["Overview", "Investments", "Transactions", "Performance", "ETF Research", "Watchlist", "Holdings & risk", "Portfolio X-Ray", "Market analysis", "AI Analyst", "Forecast Lab", "Data operations", "Methodology & data"]
 user_key = str(_current_user["user_id"]) if _current_user is not None else "local"
+
+
+def _read_preferred_start_page() -> str | None:
+    reader = getattr(portfolio_store, "get_preferred_start_page", None)
+    if callable(reader):
+        return reader()
+    # Keep the app bootable if a hosted instance has an older cached portfolio
+    # module while app.py has already refreshed.
+    with portfolio_store._connect() as con:
+        con.execute("""CREATE TABLE IF NOT EXISTS app_preferences (
+            preference_key TEXT PRIMARY KEY,
+            preference_value TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+        row = con.execute(
+            "SELECT preference_value FROM app_preferences WHERE preference_key=?",
+            ("preferred_start_page",),
+        ).fetchone()
+    return str(row["preference_value"] or "") if row else None
+
+
+def _write_preferred_start_page(page: str | None) -> None:
+    writer = getattr(portfolio_store, "set_preferred_start_page", None)
+    if callable(writer):
+        writer(page)
+        return
+    with portfolio_store._connect() as con:
+        con.execute("""CREATE TABLE IF NOT EXISTS app_preferences (
+            preference_key TEXT PRIMARY KEY,
+            preference_value TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+        if page:
+            con.execute("""INSERT INTO app_preferences(preference_key,preference_value)
+                VALUES(?,?) ON CONFLICT(preference_key) DO UPDATE SET
+                preference_value=excluded.preference_value,updated_at=CURRENT_TIMESTAMP""",
+                ("preferred_start_page", str(page)))
+        else:
+            con.execute("DELETE FROM app_preferences WHERE preference_key=?", ("preferred_start_page",))
+
+
 workspace_token = str(st.session_state.get("auth_session_token", ""))
 workspace_session_key = hashlib.sha256(workspace_token.encode("utf-8")).hexdigest() if workspace_token else user_key
 if st.session_state.get("_workspace_session_key") != workspace_session_key:
-    pinned_start_page = get_preferred_start_page()
+    pinned_start_page = _read_preferred_start_page()
     if pinned_start_page not in PAGES:
         pinned_start_page = None
     st.session_state["_pinned_start_page"] = pinned_start_page
@@ -662,7 +703,7 @@ for workspace_item in PAGES:
             key=f"workspace_pin_{item_key}",
         ):
             pinned_start_page = None if is_pinned else workspace_item
-            set_preferred_start_page(pinned_start_page)
+            _write_preferred_start_page(pinned_start_page)
             st.session_state["_pinned_start_page"] = pinned_start_page
             st.toast(
                 f"{workspace_item} will open first after your next sign-in."
