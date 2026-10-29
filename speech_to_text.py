@@ -53,7 +53,7 @@ _CSS = """
   .secondary-actions { display:contents; }
   .controls button { box-sizing:border-box; width:108px !important; min-width:108px; height:36px; min-height:36px; max-height:36px; padding:4px 6px; border-radius:8px; font-size:12px !important; font-weight:650; line-height:1.1; }
   #dictation-start { flex:none; }
-  #dictation-status { font-size:11px !important; line-height:1.4; }
+  #dictation-status { font-size:12px !important; line-height:1.4; }
 }
 """
 
@@ -258,4 +258,4 @@ def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
     # Bump this version whenever the embedded HTML/CSS/JS changes so Streamlit
     # registers a fresh component bundle instead of reusing the old frontend.
-    return _portfolio_question_dictation_component(8)(**kwargs)
+    return _portfolio_question_dictation_component(9)(**kwargs)

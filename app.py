@@ -2197,12 +2197,12 @@ elif page == "AI Analyst":
     with st.container(key="ai_portfolio_briefing_card"):
         st.subheader("Portfolio briefing")
         st.caption("Dated facts, risks, stress scenario and missing data.")
-        briefing_clicked = st.button("Build briefing", type="primary", key="build_ai_portfolio_briefing", width=108)
+        briefing_clicked = st.button("Build briefing", type="primary", key="build_ai_portfolio_briefing_v9", width=108)
 
     with st.container(border=True, key="ai_portfolio_question_card"):
         st.subheader("Ask a question about your portfolio")
         dictation_result = portfolio_question_input_component(
-            key="ai_portfolio_question_dictation",
+            key="ai_portfolio_question_dictation_v9",
             on_transcript_event_change=lambda: None,
             on_reset_event_change=lambda: None,
         )
@@ -2230,7 +2230,7 @@ elif page == "AI Analyst":
                 height=68,
                 key="ai_portfolio_question",
             )
-            ask_question_clicked = st.form_submit_button("Ask AI", type="primary", width=108)
+            ask_question_clicked = st.form_submit_button("Ask AI", type="primary", key="ask_ai_portfolio_question_v9", width=108)
         st.caption(
             "Browser speech service · Clear removes your question"
         )
