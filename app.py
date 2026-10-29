@@ -525,6 +525,8 @@ div[data-testid="stDataFrame"] { border:1px solid var(--adatch-line); border-rad
 .stButton > button[kind*="primary"]:hover, .stButton > button[data-testid*="primary"]:hover, [data-testid="stFormSubmitButton"] button[kind*="primary"]:hover, button[data-testid="stBaseButton-primary"]:hover { background:#475569 !important; background-color:#475569 !important; border-color:#475569 !important; color:#ffffff !important; }
 .stButton > button:focus-visible, [data-testid="stFormSubmitButton"] button:focus-visible { outline:3px solid rgba(100,116,139,.32) !important; outline-offset:2px; }
 .stButton > button:disabled, [data-testid="stFormSubmitButton"] button:disabled { background:#edf1f4 !important; color:#8a96a3 !important; border-color:#e1e7ec !important; -webkit-text-fill-color:#8a96a3 !important; }
+.st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] { width:auto !important; }
+.st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { width:auto !important; min-height:2.25rem; padding:.42rem .85rem; font-size:.9rem !important; }
 [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input, [data-testid="stDateInput"] input, [data-testid="stSelectbox"] div[data-baseweb="select"] > div, [data-testid="stTextArea"] textarea { border-radius:10px; }
 [data-testid="stAlert"] { border-radius:12px; }
 [data-testid="stCaptionContainer"] { color:#8591a0; }
@@ -2152,7 +2154,7 @@ elif page == "AI Analyst":
         st.write("Creates the full dated snapshot, measured facts, risks, stress scenario and missing-data summary.")
         briefing_clicked = st.button("Build portfolio briefing", type="primary", key="build_ai_portfolio_briefing")
 
-    with st.container(border=True):
+    with st.container(border=True, key="ai_portfolio_question_card"):
         st.subheader("Ask a question about your portfolio")
         dictation_result = portfolio_question_input_component(
             key="ai_portfolio_question_dictation",
@@ -2183,9 +2185,9 @@ elif page == "AI Analyst":
                 height=100,
                 key="ai_portfolio_question",
             )
-            ask_question_clicked = st.form_submit_button("Ask AI", type="primary")
+            ask_question_clicked = st.form_submit_button("Ask AI", type="primary", width="content")
         st.caption(
-            "Dictation does not use OpenRouter. Your browser sends audio to its own online speech service. Language defaults to your browser setting; change it if needed. **Reset dictation** stops listening and clears the whole question box."
+            "Audio goes to your browser's online speech service, not OpenRouter. Reset clears the whole question."
         )
 
     def run_ai_request(request_question: str, payload: dict, mode: str) -> tuple[str, str, float]:

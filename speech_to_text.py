@@ -6,38 +6,53 @@ import streamlit as st
 _HTML = """
 <div class="dictation">
   <div class="controls">
-    <label for="dictation-language">Language</label>
-    <select id="dictation-language">
-      <option value="en-GB">English (UK)</option>
-      <option value="en-US">English (US)</option>
-      <option value="pl-PL">Polski</option>
-      <option value="de-DE">Deutsch</option>
-      <option value="fr-FR">Français</option>
-    </select>
-    <button id="dictation-start" type="button">Start dictation (online)</button>
-    <button id="dictation-stop" type="button" disabled>Stop</button>
-    <button id="dictation-reset" type="button">Reset dictation</button>
+    <div class="language-control">
+      <label for="dictation-language">Language</label>
+      <select id="dictation-language">
+        <option value="en-GB">English (UK)</option>
+        <option value="en-US">English (US)</option>
+        <option value="pl-PL">Polski</option>
+        <option value="de-DE">Deutsch</option>
+        <option value="fr-FR">Français</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button id="dictation-start" type="button">Start dictation</button>
+      <div class="secondary-actions">
+        <button id="dictation-stop" type="button" disabled>Stop</button>
+        <button id="dictation-reset" type="button">Reset dictation</button>
+      </div>
+    </div>
   </div>
   <div id="dictation-status" role="status" aria-live="polite">
-    Browser dictation processes audio online. It does not send audio to OpenRouter.
+    Ready. Press Start dictation when you are ready.
   </div>
 </div>
 """
 
 _CSS = """
-.dictation { margin: 0.25rem 0 0.75rem; font: inherit; color: var(--st-text-color); }
-.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
-.controls label { font-size: 0.9rem; }
-.controls select, .controls button {
-  min-height: 2.35rem; border: 1px solid var(--st-border-color);
-  border-radius: 0.5rem; padding: 0.4rem 0.75rem;
-  color: var(--st-text-color); background: var(--st-background-color);
-  font: inherit;
+.dictation { width:100%; margin:.1rem 0 .35rem; color:#263445; font-family:inherit; }
+.controls { display:flex; flex-wrap:wrap; align-items:center; gap:.45rem .65rem; }
+.language-control { display:flex; align-items:center; gap:.5rem; min-width:0; }
+.language-control label { flex:0 0 auto; color:#556274; font-size:.85rem; }
+.language-control select { flex:0 1 auto; width:150px; min-width:120px; min-height:36px; padding:.35rem .6rem; border:1px solid #cbd3dc; border-radius:8px; background:#fff; color:#263445; font:inherit; font-size:.9rem; }
+.actions { display:flex; flex:0 1 auto; align-items:center; gap:.4rem; min-width:0; }
+.secondary-actions { display:flex; align-items:center; gap:.4rem; }
+.controls button { width:auto; min-width:0; min-height:36px; padding:.38rem .7rem; border:1px solid #d1d8e0; border-radius:8px; background:#fff; color:#344256; font:inherit; font-size:.88rem; line-height:1.2; cursor:pointer; white-space:nowrap; }
+#dictation-start { border-color:#64748b; background:#64748b; color:#fff; font-weight:600; }
+#dictation-start:hover { border-color:#475569; background:#475569; }
+.controls button:disabled { cursor:not-allowed; opacity:.5; }
+#dictation-status { flex:1 1 100%; min-width:0; margin-top:.05rem; color:#758195; font-size:.78rem; line-height:1.35; overflow-wrap:anywhere; }
+@media (max-width:600px) {
+  .controls { gap:.45rem .55rem; }
+  .language-control { flex:1 1 100%; }
+  .language-control select { width:auto; min-width:140px; max-width:190px; min-height:36px; font-size:16px; }
+  .actions { flex:1 1 100%; gap:.35rem; }
+  #dictation-start { flex:1 1 auto; }
+  .secondary-actions { gap:.35rem; }
+  .controls button { min-height:36px; padding:.4rem .65rem; font-size:14px; }
+  #dictation-status { font-size:12px; }
 }
-.controls button { cursor: pointer; }
-.controls button:disabled { cursor: not-allowed; opacity: 0.55; }
-#dictation-reset { margin-left: auto; }
-#dictation-status { margin-top: 0.4rem; color: var(--st-secondary-text-color); font-size: 0.85rem; }
 """
 
 _JS = r"""
@@ -80,9 +95,9 @@ export default function(component) {
 
   if (!Recognition) {
     startButton.disabled = true;
-    setStatus("Dictation is not supported by this browser. You can type your question or use your device's voice typing in the question box.");
+    setStatus("Dictation is unavailable in this browser. You can type your question or use your device's voice typing.");
   } else {
-    setStatus("Browser dictation sends audio to the browser's online speech service. Audio is not sent to OpenRouter.");
+    setStatus("Ready. Press Start dictation when you are ready.");
   }
 
   const flushTranscript = () => {
@@ -228,9 +243,9 @@ export default function(component) {
 
 
 @st.cache_resource
-def _portfolio_question_dictation_component():
+def _portfolio_question_dictation_component(version: int):
     return st.components.v2.component(
-        "portfolio_question_browser_dictation",
+        f"portfolio_question_browser_dictation_v{version}",
         html=_HTML,
         css=_CSS,
         js=_JS,
@@ -239,4 +254,4 @@ def _portfolio_question_dictation_component():
 
 def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
-    return _portfolio_question_dictation_component()(**kwargs)
+    return _portfolio_question_dictation_component(2)(**kwargs)
