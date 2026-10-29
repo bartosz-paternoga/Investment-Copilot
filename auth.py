@@ -228,7 +228,7 @@ def _cookie_manager(st):
 def _set_auth_cookie(
     st, token: str, expires_at: datetime, *, persistent: bool
 ) -> None:
-    """Set a session or persistent cookie without a component-value rerun."""
+    """Persist a token only when requested; otherwise remove any old cookie."""
     import streamlit.components.v1 as components
 
     cookie_name = json.dumps(_SESSION_COOKIE_NAME)
@@ -242,16 +242,14 @@ def _set_auth_cookie(
             const name = {cookie_name};
             const value = {cookie_value};
             const persistent = {persistent_json};
-            const cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
-                `Path=/; Secure; SameSite=Lax`;
             if (persistent) {{
                 const expires = new Date({expires}).toUTCString();
-                document.cookie = cookie + `; Expires=${{expires}}`;
+                document.cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
+                    `Path=/; Expires=${{expires}}; Secure; SameSite=Lax`;
             }} else {{
-                // Replace any older remembered cookie with a true browser-
-                // session cookie. No Expires/Max-Age means it ends at session close.
+                // Do not store an auth token in the browser when remember-me
+                // is off. This also removes a persistent cookie from an older login.
                 document.cookie = `${{encodeURIComponent(name)}}=; Path=/; Max-Age=0; Secure; SameSite=Lax`;
-                document.cookie = cookie;
             }}
         }} catch (error) {{}}
         </script>""",
@@ -440,7 +438,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 "Stay signed in on this device (30 days)",
                 value=False,
                 key="login_stay_signed_in",
-                help="When unchecked, the browser-session cookie ends when you close the browser and the server session expires after 12 hours. When checked, the sign-in persists for up to 30 days.",
+                help="When unchecked, the app does not save a sign-in cookie; a new app session requires signing in again. When checked, the sign-in persists on this device for up to 30 days.",
             )
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
