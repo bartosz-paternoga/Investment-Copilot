@@ -1,0 +1,36 @@
+name: security
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency auditor
+        run: python -m pip install --upgrade pip-audit
+      - name: Check runtime dependencies for known vulnerabilities
+        run: pip-audit --strict -r requirements.txt
+
+  python-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Bandit
+        run: python -m pip install --upgrade bandit
+      - name: Scan authentication and database boundaries
+        run: bandit --severity-level high --confidence-level high -r auth.py database.py

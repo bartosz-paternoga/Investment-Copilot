@@ -43,12 +43,14 @@ chmod +x start.sh
 
 Open `http://localhost:8501`. The launcher creates `.venv`, installs dependencies and copies `.env.example` to `.env` if needed.
 
-Run tests:
+Run the unit and SQLite-backed tests:
 
 ```bash
-.venv/bin/python -m compileall -q app.py portfolio.py advanced_analytics.py performance_engine.py research_analytics.py scripts tests
+.venv/bin/python -m compileall -q app.py auth.py database.py portfolio.py advanced_analytics.py performance_engine.py research_analytics.py scripts tests
 ETF_APP_LOCAL_DEV_MODE=1 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+The PostgreSQL integration suite is opt-in and requires two disposable databases. It exercises concurrent tenant checkouts, checks that pooled connections lose tenant search paths after commit and rollback, and restores a custom-format backup into a separate empty database. See [`docs/STREAMLIT_DEPLOYMENT.md`](docs/STREAMLIT_DEPLOYMENT.md) for the exact environment variables and command. GitHub Actions runs the suite against an ephemeral PostgreSQL service on every push and pull request.
 
 ## Historical performance, benchmark and attribution
 
@@ -134,6 +136,6 @@ Create a consistent live SQLite backup from the project root when using local de
 ./scripts/backup_db.sh
 ```
 
-Set `ETF_APP_DB_PATH` or `ETF_APP_DATA_DIR` to back up a non-default database, and `ETF_BACKUP_DIR` to change the output directory. Keep backup files outside version control and test restore procedures periodically. A GitHub Actions workflow compiles the Python modules and runs unit tests on pushes and pull requests.
+Set `ETF_APP_DB_PATH` or `ETF_APP_DATA_DIR` to back up a non-default database, and `ETF_BACKUP_DIR` to change the output directory. Keep backup files outside version control and test restore procedures periodically. GitHub Actions compiles the app, runs unit and PostgreSQL integration tests, audits runtime dependencies with pip-audit weekly, and scans authentication/database code with Bandit. Dependabot opens weekly Python dependency and GitHub Actions update pull requests.
 
 For hosted PostgreSQL backups and recovery drills, use `scripts/backup_postgres.sh` and `scripts/restore_postgres.sh` as described in the deployment guide.

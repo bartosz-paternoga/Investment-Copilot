@@ -23,7 +23,7 @@ The first connection needs permission to create `app_private.auth_users`, a tena
    ```
 
 3. Verify that `.env`, `.streamlit/secrets.toml`, `data/`, SQLite databases, backup dumps, and exports are not committed. If a credential was ever committed, rotate it; deleting it in a later commit is not sufficient.
-4. GitHub Actions compiles the app and runs unit tests on pushes and pull requests.
+4. GitHub Actions compiles the app and runs unit tests on pushes and pull requests. A separate ephemeral-PostgreSQL job tests concurrent tenant isolation, pooled connection cleanup, and the backup/restore scripts.
 
 ## 3. Deploy on Streamlit Community Cloud
 
@@ -70,6 +70,16 @@ export RESTORE_DATABASE_URL='postgresql://.../investment_pilot_recovery'
 
 The restore script requires typing `RESTORE` and deliberately uses `RESTORE_DATABASE_URL`, not `DATABASE_URL`, to reduce the chance of overwriting production. After restoration, verify sign-in, user activation, portfolio transactions, watchlists, history caches, and snapshots. Perform a restore drill before relying on backups for production recovery.
 
+The automated PostgreSQL integration suite runs the same backup and restore scripts against two disposable databases. To run it locally, install `psycopg[binary,pool]` and PostgreSQL client tools, create two empty test databases (the restore target must be empty), and set:
+
+```bash
+export TEST_DATABASE_URL='postgresql://.../investment_copilot_test'
+export TEST_RESTORE_DATABASE_URL='postgresql://.../investment_copilot_restore_test'
+python -m unittest discover -s tests -p 'test_postgres_integration.py' -v
+```
+
+The concurrency test creates and removes uniquely named tenant schemas. The restore drill writes only to the dedicated source test database and restores into the separate empty target. **Never set these variables to production databases.**
+
 ## 5. Clean start / keeping old SQLite data separate
 
 Hosted PostgreSQL starts empty. No SQLite file is imported. Keep your original ZIP and any existing `data/portfolio.sqlite3` or holdings exports in a separate private archive or encrypted backup location, outside the Git repository. The original upload ZIP did not contain a `data/` database folder, so there was no SQLite database to migrate from the provided archive. Local `data/` files, if you have them elsewhere, are left untouched by this deployment package.
@@ -89,6 +99,10 @@ ETF_APP_LOCAL_DEV_MODE=1 python -m unittest discover -s tests -v
 ```
 
 For hosted mode, set `DATABASE_URL`, `BOOTSTRAP_ADMIN_USERNAME`, and `BOOTSTRAP_ADMIN_PASSWORD` in Streamlit Secrets and do not enable `ETF_APP_LOCAL_DEV_MODE`.
+
+## Dependency and security monitoring
+
+Dependabot checks Python dependencies and GitHub Actions weekly and opens update pull requests. The scheduled security workflow runs `pip-audit` against runtime requirements and a high-severity/high-confidence Bandit scan of authentication and database code; it also runs on pushes and pull requests. Keep GitHub's **Dependency graph**, **Dependabot alerts**, and **Dependabot security updates** enabled in repository settings so newly disclosed advisories produce alerts and security-fix pull requests. Review each update, let CI checks pass, and deploy through the normal release process.
 
 ## Operational caveats
 
