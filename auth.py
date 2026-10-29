@@ -191,17 +191,123 @@ def revoke_auth_session(token: str | None) -> None:
 
 
 def _auth_cookie_component(**kwargs):
-    """Run the small first-party component that reads/writes our auth cookie."""
+    """Use an in-page component to persist and restore the browser session."""
     global _AUTH_COOKIE_COMPONENT
     if _AUTH_COOKIE_COMPONENT is None:
-        from pathlib import Path
-        import streamlit.components.v1 as components
+        import streamlit as st
 
-        _AUTH_COOKIE_COMPONENT = components.declare_component(
-            "investment_copilot_auth_cookie",
-            path=str(Path(__file__).with_name("auth_cookie_component")),
+        component_js = r"""
+const PERSISTENT_STORAGE_KEY = "investment_copilot_auth_persistent";
+const TAB_STORAGE_KEY = "investment_copilot_auth_tab";
+const handledCommands = new Map();
+
+function readCookie(name) {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const entry = document.cookie.split(";").map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  if (!entry) return "";
+  try { return decodeURIComponent(entry.slice(prefix.length)); }
+  catch (_error) { return entry.slice(prefix.length); }
+}
+
+function readStoredSession() {
+  let persistent = "";
+  let tab = "";
+  try {
+    const record = JSON.parse(localStorage.getItem(PERSISTENT_STORAGE_KEY) || "null");
+    if (record && typeof record.token === "string") {
+      const expiresAt = Number(record.expiresAt || 0);
+      if (!expiresAt || expiresAt > Date.now()) persistent = record.token;
+      else localStorage.removeItem(PERSISTENT_STORAGE_KEY);
+    }
+  } catch (_error) { /* Cookie fallback is checked below. */ }
+  try { tab = sessionStorage.getItem(TAB_STORAGE_KEY) || ""; }
+  catch (_error) { /* Cookie fallback is checked below. */ }
+  return { persistent, tab };
+}
+
+export default function({ key, data, setStateValue }) {
+  const command = JSON.stringify(data || {});
+  if (handledCommands.get(key) === command) return;
+  handledCommands.set(key, command);
+
+  const args = data || {};
+  const name = String(args.cookie_name || "");
+  const action = String(args.action || "get");
+  const result = { ready: true, value: "", storage: "", error: "" };
+  try {
+    if (name && action === "set") {
+      const token = String(args.cookie_value || "");
+      if (args.expires_at) {
+        const expiresAt = new Date(args.expires_at).getTime();
+        if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+          throw new Error("Invalid sign-in expiry");
+        }
+        localStorage.setItem(PERSISTENT_STORAGE_KEY, JSON.stringify({ token, expiresAt }));
+        try { sessionStorage.removeItem(TAB_STORAGE_KEY); } catch (_error) {}
+        result.storage = "persistent";
+      } else {
+        sessionStorage.setItem(TAB_STORAGE_KEY, token);
+        try { localStorage.removeItem(PERSISTENT_STORAGE_KEY); } catch (_error) {}
+        result.storage = "tab";
+      }
+
+      // The cookie is retained for compatibility. Session restore uses browser
+      // storage directly, so it does not depend on cookies reaching Cloud's websocket.
+      try {
+        const attributes = ["Path=/", "SameSite=Lax"];
+        if (args.secure !== false) attributes.push("Secure");
+        if (args.expires_at) attributes.push(`Expires=${new Date(args.expires_at).toUTCString()}`);
+        document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(token)}; ${attributes.join("; ")}`;
+      } catch (_error) {}
+
+      const saved = readStoredSession();
+      result.value = result.storage === "persistent" ? saved.persistent : saved.tab;
+      if (result.value !== token) throw new Error("Browser storage did not confirm the sign-in");
+    } else if (name && action === "delete") {
+      try { localStorage.removeItem(PERSISTENT_STORAGE_KEY); } catch (_error) {}
+      try { sessionStorage.removeItem(TAB_STORAGE_KEY); } catch (_error) {}
+      try {
+        document.cookie = `${encodeURIComponent(name)}=; Path=/; Max-Age=0; SameSite=Lax` +
+          (args.secure === false ? "" : "; Secure");
+      } catch (_error) {}
+      result.value = readCookie(name);
+    } else if (name && action === "get") {
+      const saved = readStoredSession();
+      if (saved.persistent) {
+        result.value = saved.persistent;
+        result.storage = "persistent";
+      } else if (saved.tab) {
+        result.value = saved.tab;
+        result.storage = "tab";
+      } else {
+        result.value = readCookie(name);
+        result.storage = result.value ? "cookie" : "";
+      }
+    }
+  } catch (error) {
+    result.error = String(error && error.message ? error.message : error);
+  }
+  setStateValue("result", result);
+}
+"""
+        _AUTH_COOKIE_COMPONENT = st.components.v2.component(
+            name="investment_copilot_auth_storage",
+            js=component_js,
         )
-    return _AUTH_COOKIE_COMPONENT(height=0, **kwargs)
+
+    args = dict(kwargs)
+    key = args.pop("key", None)
+    default = args.pop("default", None)
+    result = _AUTH_COOKIE_COMPONENT(
+        key=key,
+        data=args,
+        default={"result": default},
+        on_result_change=lambda: None,
+        width="content",
+        height=1,
+    )
+    return getattr(result, "result", default)
 
 
 def _request_session_cookie(st) -> str | None:
