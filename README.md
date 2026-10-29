@@ -22,8 +22,8 @@ A polished personal ETF portfolio workspace built with Python, Streamlit, Pandas
 - Separate approximate money-weighted XIRR using recorded transaction flows.
 - Holdings risk view with annualized volatility, maximum drawdown, worst daily move and correlations. Price-series gaps are not silently filled indefinitely.
 - ETF Research workspace for instrument metadata, exposure by held ETF, sourced constituent CSV imports, weight-coverage checks and pairwise shared-weight overlap.
-- Portfolio X-Ray combines current positions with automatically fetched, dated public holdings for supported Amundi, iShares, Vanguard and Xtrackers ETFs; other funds can use a dated issuer CSV import.
-- Market proxy dashboard, AI read-only analyst (optional OpenRouter key), and Monte Carlo Forecast Lab whose inflation-adjusted labels follow the selected reporting currency.
+- Portfolio X-Ray combines current positions with dated public holdings fetched directly from mapped Vanguard EU and Xtrackers funds, iShares INDA/MCHI, and State Street SPYL; other funds can use a dated issuer CSV import.
+- Market proxy dashboard, evidence-based AI portfolio briefing (optional OpenRouter key) with dated measured facts, source references, explicit data gaps and a mechanical market-stress scenario, and Monte Carlo Forecast Lab whose inflation-adjusted labels follow the selected reporting currency.
 
 ### Data reliability and operations
 - Persistent SQLite cache for latest quotes, adjusted daily prices and historical FX fixings; rows are keyed by ticker/date to avoid duplicate daily history.
@@ -88,14 +88,14 @@ Create the local environment file if needed (`cp .env.example .env`), then run `
 
 ## Optional AI analyst
 
-Add a key to `.env`:
+For the local app, add the key to `.env`:
 
 ```dotenv
 OPENROUTER_API_KEY=""
 OPENROUTER_MODEL=openrouter/free
 ```
 
-The AI request happens only after you click Analyze. The selected prompt and current portfolio summary/quote information are sent to OpenRouter. Do not include secrets or sensitive personal details in prompts. Model availability and pricing depend on the provider.
+For the hosted Streamlit app, add `OPENROUTER_API_KEY` under **Manage app → Settings → Secrets** instead; changing your computer's `.env` does not update the hosted app. The AI Analyst has separate actions: **Build portfolio briefing** creates the standard dated report, while **Ask AI** sends the text-box question with fresh portfolio evidence. For a question naming a company, the app searches the full sourced company-exposure table and sends matching rows, including their calculated portfolio share and issuer dates; the full issuer holdings files are not sent. Cited AI commentary is shown even if the model uses different headings; uncited or invalidly cited drafts are shown separately with an unverified warning. The app makes one request per action and identifies provider errors by HTTP status or timeout reason, model, and—when supplied by OpenRouter—the request ID. The selected prompt, current position summary, price and FX dates, selected X-Ray exposure summaries, and source references are sent to OpenRouter; the full transaction ledger and issuer constituent files are not. The app calculates measured facts and the mechanical 20% scenario locally, while the model provides cited commentary. Do not include secrets or sensitive personal details in prompts. Model availability and pricing depend on the provider.
 
 ## Recommended portfolio setup
 

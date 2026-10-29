@@ -4,6 +4,7 @@ import json
 import hashlib
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -36,6 +37,7 @@ from performance_engine import (
 )
 from research_analytics import calculate_etf_overlap, calculate_portfolio_xray, holdings_weight_coverage
 from etf_holdings_sources import fetch_issuer_holdings
+from analyst_evidence import build_analyst_evidence
 
 TABLE_AMOUNT_WIDTH = None
 TABLE_PERCENT_WIDTH = None
@@ -51,6 +53,343 @@ st.set_page_config(page_title="Investment Copilot | Portfolio", page_icon="📈"
 def _cached_issuer_holdings(fund_ticker: str, isin: str = "") -> dict:
     """Cache public issuer data by fund so normal app reruns never refetch it."""
     return fetch_issuer_holdings(fund_ticker, isin)
+
+
+def _ensure_analyst_issuer_holdings(portfolio: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Load missing or week-old automatic holdings before building an AI briefing."""
+    if portfolio is None or portfolio.empty or "market_value_base" not in portfolio:
+        return list_etf_holdings(latest_only=True), []
+    tickers = sorted(
+        portfolio.loc[portfolio["market_value_base"].notna(), "ticker"]
+        .dropna().astype(str).str.strip().str.upper().unique()
+    )
+    try:
+        instruments = list_instruments()
+        isins = (
+            dict(zip(instruments["ticker"].fillna("").astype(str).str.upper(),
+                     instruments["isin"].fillna("").astype(str).str.upper()))
+            if not instruments.empty and {"ticker", "isin"}.issubset(instruments.columns) else {}
+        )
+    except Exception:
+        isins = {}
+
+    saved = list_etf_holdings(latest_only=True)
+    by_fund = {
+        str(fund).upper(): group.copy()
+        for fund, group in saved.groupby("fund_ticker")
+    } if not saved.empty and "fund_ticker" in saved else {}
+    errors = []
+    for ticker in tickers:
+        current = by_fund.get(ticker)
+        refresh = current is None or current.empty
+        if current is not None and not current.empty:
+            automatic = current.get("source_name", pd.Series(dtype=str)).fillna("").astype(str).str.contains(
+                r"issuer (?:holdings|exposure)", case=False, regex=True
+            ).any()
+            if automatic:
+                imported_at = pd.to_datetime(current.get("imported_at"), errors="coerce", utc=True).max()
+                refresh = pd.isna(imported_at) or (pd.Timestamp.now(tz="UTC") - imported_at).days >= 7
+        if not refresh:
+            continue
+        try:
+            snapshot = _cached_issuer_holdings(ticker, isins.get(ticker, ""))
+            save_etf_holdings(
+                ticker,
+                snapshot["holdings"].drop(columns=["_source_date"], errors="ignore"),
+                source_name=snapshot["source_name"],
+                source_url=snapshot["source_url"],
+                as_of=snapshot["as_of"],
+            )
+        except Exception as exc:
+            if current is not None and not current.empty:
+                saved_dates = current.get("as_of", pd.Series(dtype=str)).dropna().astype(str)
+                saved_date = saved_dates.max() if not saved_dates.empty else "date unavailable"
+                errors.append(f"{ticker}: refresh failed; using saved holdings dated {saved_date}. {exc}")
+            else:
+                errors.append(f"{ticker}: {exc}")
+    return list_etf_holdings(latest_only=True), errors
+
+
+def _openrouter_http_error(response: requests.Response) -> str:
+    """Turn OpenRouter status codes into useful, safe-to-display diagnostics."""
+    status = int(response.status_code)
+    try:
+        body = response.json()
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        detail = str(error.get("message") or error.get("code") or "").strip() if isinstance(error, dict) else ""
+    except (ValueError, TypeError):
+        detail = ""
+    detail = re.sub(r"\s+", " ", detail)[:300]
+    suffix = f" Provider message: {detail}" if detail else ""
+    if status == 401:
+        return f"OpenRouter rejected the API key (HTTP 401). Check OPENROUTER_API_KEY in Streamlit app Secrets for the online app, or in .env for the local app.{suffix}"
+    if status == 402:
+        return f"OpenRouter returned HTTP 402 (payment/credits or model access). Check the account's Credits and Activity pages before replacing the key.{suffix}"
+    if status == 403:
+        return f"OpenRouter denied this request (HTTP 403). Check the key or workspace restrictions; this is not a timeout.{suffix}"
+    if status == 404:
+        return f"OpenRouter could not find the configured model (HTTP 404). Check OPENROUTER_MODEL in app Secrets.{suffix}"
+    if status == 429:
+        return f"OpenRouter rate-limited this request (HTTP 429). The free-model request limit or provider limit may have been reached; check Activity and wait before retrying.{suffix}"
+    if status in {408, 502, 503, 504, 524, 529} or status >= 500:
+        return f"OpenRouter or its selected model provider is slow or unavailable (HTTP {status}); this does not indicate an exhausted API key.{suffix}"
+    return f"OpenRouter returned HTTP {status}.{suffix}"
+
+
+def _openrouter_settings() -> tuple[str, str, str]:
+    """Read provider settings from Streamlit Secrets first, then local env/.env."""
+    try:
+        secret_key = str(st.secrets.get("OPENROUTER_API_KEY", "") or "").strip()
+        secret_model = str(st.secrets.get("OPENROUTER_MODEL", "") or "").strip()
+    except Exception:
+        secret_key = ""
+        secret_model = ""
+    env_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    env_model = os.getenv("OPENROUTER_MODEL", "").strip()
+    if secret_key:
+        return secret_key, secret_model or env_model or "openrouter/free", "Streamlit app Secrets"
+    if env_key:
+        return env_key, env_model or "openrouter/free", "local .env/environment"
+    return "", secret_model or env_model or "openrouter/free", "not configured"
+
+
+def _build_analyst_packet(
+    portfolio: pd.DataFrame,
+    quotes: pd.DataFrame,
+    fx_metadata: dict,
+    reporting_currency: str,
+    display_timezone: str,
+    focus_query: str = "",
+) -> tuple[str, dict]:
+    """Refresh dated issuer snapshots as needed, then calculate briefing evidence."""
+    briefing_as_of = pd.Timestamp.now(tz="UTC").tz_convert(display_timezone).strftime("%Y-%m-%d %H:%M %Z")
+    issuer_holdings, issuer_refresh_errors = _ensure_analyst_issuer_holdings(portfolio)
+    payload = build_analyst_evidence(
+        portfolio=portfolio,
+        quotes=quotes,
+        issuer_holdings=issuer_holdings,
+        fx_metadata=fx_metadata,
+        reporting_currency=reporting_currency,
+        as_of=briefing_as_of,
+        focus_query=focus_query,
+    )
+    if issuer_refresh_errors:
+        payload["data_gaps"].append({
+            "item": "Issuer holdings refresh",
+            "gap": "; ".join(issuer_refresh_errors)[:1200],
+        })
+    return briefing_as_of, payload
+
+
+def _openrouter_chat(
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    response_format: dict | None = None,
+) -> tuple[str, str, float]:
+    """Return answer, actionable error text, and elapsed seconds without exposing credentials."""
+    started = time.monotonic()
+    response = None
+    try:
+        request_body = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 4096,
+        }
+        if response_format:
+            # Require an endpoint that honors the evidence-linked response
+            # schema; the app cannot safely trust free-form uncited prose.
+            request_body["response_format"] = response_format
+            request_body["provider"] = {"require_parameters": True}
+        # openrouter/free can select a reasoning model (as it did here).
+        # Bound that model's thinking effort so it leaves room for visible text.
+        if model == "openrouter/free":
+            request_body["reasoning"] = {"effort": "low", "exclude": True}
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://investmentcopilot.streamlit.app",
+                "X-Title": "Investment Copilot",
+            },
+            # Reasoning and visible text share this limit on many providers. A
+            # 1,200-token cap was exhausted by Recursive/Flint's reasoning
+            # before it returned any commentary. Keep the answer concise in
+            # the prompt, but leave enough completion budget for reasoning
+            # plus the actual cited text.
+            json=request_body,
+            timeout=(10, 30),
+        )
+        response.raise_for_status()
+        body = response.json()
+        choices = body.get("choices", []) if isinstance(body, dict) else []
+        choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+        message = choice.get("message", {}) if isinstance(choice.get("message", {}), dict) else {}
+        content = message.get("content")
+        if isinstance(content, list):
+            answer = "".join(
+                str(part.get("text", "")) for part in content if isinstance(part, dict)
+            ).strip()
+        else:
+            answer = str(content or "").strip()
+        if not answer:
+            request_id = response.headers.get("x-request-id", "")
+            finish_reason = str(choice.get("finish_reason") or "not provided")
+            refusal = re.sub(r"\s+", " ", str(message.get("refusal") or ""))[:250]
+            provider = str(body.get("provider") or "") if isinstance(body, dict) else ""
+            details = [f"finish reason: {finish_reason}"]
+            usage = body.get("usage", {}) if isinstance(body, dict) else {}
+            usage = usage if isinstance(usage, dict) else {}
+            completion_details = usage.get("completion_tokens_details", {})
+            completion_details = completion_details if isinstance(completion_details, dict) else {}
+            completion_tokens = usage.get("completion_tokens")
+            reasoning_tokens = completion_details.get("reasoning_tokens")
+            if completion_tokens is not None:
+                details.append(f"completion tokens used: {completion_tokens}")
+            if reasoning_tokens is not None:
+                details.append(f"reasoning tokens: {reasoning_tokens}")
+            if finish_reason == "length":
+                details.append("the model reached its output-token limit before returning visible text")
+            if refusal:
+                details.append(f"provider refusal: {refusal}")
+            if provider:
+                details.append(f"provider: {provider}")
+            if request_id:
+                details.append(f"request ID: {request_id}")
+            return "", f"OpenRouter returned HTTP 200 but no answer text ({'; '.join(details)}). Model: {model}.", time.monotonic() - started
+        return answer, "", time.monotonic() - started
+    except requests.HTTPError:
+        elapsed = time.monotonic() - started
+        request_id = response.headers.get("x-request-id", "") if response is not None else ""
+        detail = _openrouter_http_error(response) if response is not None else "OpenRouter returned an HTTP error without a response body."
+        if request_id:
+            detail += f" OpenRouter request ID: {request_id}."
+        return "", f"{detail} Model: {model}.", elapsed
+    except requests.ConnectTimeout:
+        elapsed = time.monotonic() - started
+        return "", f"Could not connect to OpenRouter within 10 seconds. This is a network/connectivity issue, not evidence of exhausted credits. Model: {model}; waited {elapsed:.1f} seconds.", elapsed
+    except requests.ReadTimeout:
+        elapsed = time.monotonic() - started
+        request_id = response.headers.get("x-request-id", "") if response is not None else ""
+        suffix = f" OpenRouter request ID: {request_id}." if request_id else ""
+        return "", f"OpenRouter accepted the connection but did not finish within 30 seconds. Check OpenRouter Activity for the selected provider/model; this does not by itself mean credits are exhausted. Model: {model}; waited {elapsed:.1f} seconds.{suffix}", elapsed
+    except requests.Timeout:
+        elapsed = time.monotonic() - started
+        return "", f"The OpenRouter request timed out after {elapsed:.1f} seconds. Check OpenRouter Activity; this does not by itself mean credits are exhausted. Model: {model}.", elapsed
+    except requests.ConnectionError as exc:
+        elapsed = time.monotonic() - started
+        return "", f"Could not connect to OpenRouter: {str(exc)[:250]}. This indicates a network/connectivity issue, not exhausted credits. Model: {model}; waited {elapsed:.1f} seconds.", elapsed
+    except (requests.RequestException, KeyError, IndexError, ValueError, TypeError) as exc:
+        elapsed = time.monotonic() - started
+        return "", f"OpenRouter response could not be read ({type(exc).__name__}: {str(exc)[:250]}). Model: {model}; waited {elapsed:.1f} seconds.", elapsed
+
+
+def _ai_reference_ids(payload: dict) -> list[str]:
+    """Return the only reference IDs the model may attach to its claims."""
+    valid_refs = {
+        str(row.get("Reference", ""))
+        for row in payload.get("sources", [])
+        if row.get("Reference")
+    }
+    valid_refs.update(
+        str(row.get("ID", ""))
+        for row in payload.get("facts", [])
+        if row.get("ID")
+    )
+    scenario = payload.get("stress_scenario")
+    if scenario and scenario.get("ID"):
+        valid_refs.add(str(scenario["ID"]))
+    return sorted(valid_refs)
+
+
+def _ai_citation_response_format(payload: dict) -> dict:
+    """Constrain each model point to cite IDs that exist in this evidence packet."""
+    valid_refs = _ai_reference_ids(payload)
+    schema = {
+        "type": "object",
+        "properties": {
+            "points": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "references": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": valid_refs},
+                        },
+                    },
+                    "required": ["text", "references"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["points"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "cited_portfolio_commentary",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def _format_structured_ai_answer(answer: str, payload: dict) -> tuple[str, str]:
+    """Render model claims with app-added citations after validating each ID."""
+    try:
+        result = json.loads(answer)
+    except (json.JSONDecodeError, TypeError):
+        return answer, "The AI reply did not follow the required structured format for evidence-linked points."
+    if not isinstance(result, dict) or not isinstance(result.get("points"), list):
+        return answer, "The AI reply did not contain the required list of evidence-linked points."
+
+    allowed = set(_ai_reference_ids(payload))
+    rendered = []
+    for point in result["points"]:
+        if not isinstance(point, dict):
+            return answer, "The AI reply contained a malformed evidence-linked point."
+        text = str(point.get("text", "") or "").strip()
+        refs = point.get("references")
+        if not text or not isinstance(refs, list) or not refs:
+            return answer, "At least one AI point was empty or had no evidence references."
+        refs = list(dict.fromkeys(str(ref) for ref in refs))
+        unknown_refs = sorted(set(refs) - allowed)
+        if unknown_refs:
+            return answer, "The AI reply used reference IDs that are not in this briefing (" + ", ".join(unknown_refs) + ")."
+        rendered.append(f"- {text} " + " ".join(f"[{ref}]" for ref in refs))
+
+    if not rendered:
+        return answer, "The AI reply did not provide any evidence-linked points."
+    formatted = "\n".join(rendered)
+    refs_ok, refs_error = _valid_ai_refs(formatted, payload)
+    if not refs_ok:
+        return answer, refs_error
+    return formatted, ""
+
+
+def _valid_ai_refs(answer: str, payload: dict) -> tuple[bool, str]:
+    """Require at least one supplied citation and reject fabricated reference IDs."""
+    valid_refs = set(_ai_reference_ids(payload))
+    cited_refs = set(re.findall(r"\[([A-Z]\d{2})\]", answer))
+    if not cited_refs:
+        return False, "The AI reply did not cite any of the supplied evidence references."
+    unknown_refs = sorted(cited_refs - valid_refs)
+    if unknown_refs:
+        return False, "The AI reply used reference IDs that are not in this briefing (" + ", ".join(unknown_refs) + ")."
+    return True, ""
+
+
+def _briefing_response_issue(answer: str, payload: dict) -> str:
+    """Require supplied citations but allow the model to use its own prose format."""
+    refs_ok, refs_error = _valid_ai_refs(answer, payload)
+    if not refs_ok:
+        return refs_error
+    return ""
 
 # A failed cookie-probe fragment can leave its transient flags in an existing
 # browser session after a code update. Reset only those flags once so the new
@@ -505,8 +844,8 @@ def fx_timing_label(info: dict) -> str:
 
 quotes = add_quote_timing_columns(quotes)
 portfolio = build_portfolio(transactions, quotes, base_ccy, analytics=analytics)
+fx_metadata = {}
 if not portfolio.empty:
-    fx_metadata = {}
     for currency in sorted(set(portfolio["currency"].fillna("").astype(str).str.upper())):
         if not currency:
             continue
@@ -1285,7 +1624,7 @@ elif page == "ETF Research":
 
     st.divider()
     st.subheader("Sourced ETF constituent data & overlap")
-    st.write("Portfolio X-Ray automatically retrieves public holdings from Amundi, iShares, Vanguard, Xtrackers and State Street for supported funds. Single-asset products such as physical gold and Bitcoin are classified separately. Use this importer for other funds or for a dated issuer snapshot. The app does not invent company constituents.")
+    st.write("Portfolio X-Ray downloads dated public holdings directly for Vanguard EU funds with a mapped product id, Xtrackers funds with a known ISIN, iShares INDA/MCHI, and State Street SPYL. Single-asset products such as physical gold and Bitcoin are classified separately. Import an issuer CSV for other funds. The app does not invent company constituents.")
     template = "fund_ticker,constituent_ticker,weight_pct,constituent_name,sector,country,region\n".encode("utf-8")
     st.download_button("Download CSV template", template, "etf_constituents_template.csv", "text/csv")
     st.caption("The required columns are fund_ticker, constituent_ticker and weight_pct. Add sector, country and region when your source provides them; the app leaves missing classifications unknown.")
@@ -1701,12 +2040,14 @@ elif page == "Portfolio X-Ray":
                 "portfolio_weight_pct": "Portfolio weight %",
                 "constituents": "Constituents",
                 "etfs": "ETFs",
+                "held_through": "Held through ETFs",
             })
             european_dataframe(view, use_container_width=True, hide_index=True, column_config={
                 "Value (" + base_ccy + ")": st.column_config.NumberColumn(format="%.2f"),
                 "Portfolio weight %": st.column_config.NumberColumn(format="%.2f%%"),
                 "Constituents": st.column_config.NumberColumn(format="%.0f", width="small"),
                 "ETFs": st.column_config.NumberColumn(format="%.0f", width="small"),
+                "Held through ETFs": st.column_config.TextColumn(width="medium"),
             })
             st.download_button(f"Download {label.lower()} exposures CSV", view.to_csv(index=False).encode("utf-8"), download_name, "text/csv")
 
@@ -1806,42 +2147,427 @@ elif page == "Market analysis":
 
 elif page == "AI Analyst":
     st.title("AI portfolio analyst")
-    st.write("A read-only research assistant grounded in your ledger and the latest available quote responses. AI analysis is not a substitute for verified data or professional advice.")
-    with st.form("ai_analyst_form"):
-        prompt = st.text_area(
-            "What would you like to investigate?",
-            value="Review my portfolio. Identify concentration, currency and diversification risks, explain the largest exposures, and list what data is missing. Separate observations from assumptions.",
-            height=120,
-            key="ai_analyst_prompt",
-        )
-        analyze_clicked = st.form_submit_button("Analyze portfolio", type="primary")
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    model = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip() or "openrouter/free"
-    if analyze_clicked:
-        if not api_key:
-            st.error("OPENROUTER_API_KEY is empty. Add your key in .env and restart Streamlit.")
+    st.write("Build the standard dated portfolio briefing, or ask a separate question about the portfolio. The tables and calculations are prepared by the app; the AI adds cited commentary.")
+    api_key, model, key_source = _openrouter_settings()
+    st.caption(f"AI provider: OpenRouter · model: {model} · API key: {key_source}")
+
+    with st.container(border=True):
+        st.subheader("Portfolio briefing")
+        st.write("Creates the full dated snapshot, measured facts, risks, stress scenario and missing-data summary.")
+        briefing_clicked = st.button("Build portfolio briefing", type="primary", key="build_ai_portfolio_briefing")
+
+    with st.container(border=True):
+        st.subheader("Ask a question about your portfolio")
+        with st.form("ai_portfolio_question_form"):
+            portfolio_question = st.text_area(
+                "Your question",
+                placeholder="For example: Which of my ETFs overlap most, and what evidence supports that?",
+                height=100,
+                key="ai_portfolio_question",
+            )
+            ask_question_clicked = st.form_submit_button("Ask AI", type="secondary")
+
+    def run_ai_request(request_question: str, payload: dict, mode: str) -> tuple[str, str, float]:
+        evidence_text = json.dumps(payload, ensure_ascii=False, default=str)
+        if mode == "briefing":
+            system = """You are an evidence-based portfolio research analyst. Write concise prose or bullets interpreting the portfolio evidence. Do not create fixed section headings: the app already displays measured facts, potential risks, scenarios and missing data in separate sections.
+
+Use only facts and sources in the evidence packet. Cite every portfolio-specific or external factual claim immediately using exact supplied IDs, such as [F03], [H01], [P01], [X01], or [S01]. Never invent or guess a reference, URL, date, price, holding, fee, news item, or market fact. No external news research is included; identify it as unavailable if relevant. Keep interpretations cautious and label them potential, not certain. Explain the supplied stress scenario and its assumptions without changing its calculated number. Do not calculate new numeric scenarios; use the supplied scenario only. State what is missing and how it limits the analysis. Do not provide a definitive buy or sell instruction. Keep the answer to at most five concise bullets. This is educational analysis, and you are read-only."""
+            system += """
+
+Return ONLY the JSON object required by the response schema. Put each useful conclusion in a separate point. For every point, select one or more exact reference IDs from the packet's facts and sources in its `references` array; the app will display them as citations. Each reference must directly support that point. Never put citation brackets or reference IDs in the point text. Prefer specific measured comparisons, explain what they mean for this portfolio, then state the key limit. If evidence is insufficient, say precisely what is missing and avoid filling gaps with generic investment commentary."""
+            question = "Review this portfolio. Explain the largest underlying exposures, potential concentration and currency risks, and what the supplied market stress scenario means. Identify missing evidence."
+            user = (
+                f"Task: {question}\n\nEvidence packet with source dates and reference IDs:\n{evidence_text}\n\n"
+                "Interpret only risks supported by the packet. Explain the supplied stress scenario if present, repeat its assumptions, "
+                "and identify material gaps. If information is missing, say so rather than inferring a value."
+            )
         else:
-            quoted = portfolio[[c for c in ["ticker","name","quantity","currency","price","price_date","status","market_value_base","weight_pct","cost_basis_base","unrealized_pl_base","unrealized_pl_pct"] if c in portfolio.columns]].replace({np.nan: None}).to_dict(orient="records") if not portfolio.empty else []
-            ledger_summary = {k:v for k,v in analytics.items() if k != "positions"}
-            payload = {"reporting_currency":base_ccy,"positions":quoted,"ledger_summary":ledger_summary,
-                       "last_quote_fetch":st.session_state.last_refresh,"quote_provider":"Yahoo Finance via yfinance"}
-            system = """You are a careful ETF portfolio research analyst. Provide educational analysis only, not individualized regulated financial advice. Treat supplied prices as latest available, potentially delayed and incomplete. Do not invent data, news, fund holdings, fees, or causality. Separate observations, interpretations, assumptions and uncertainties. Do not guarantee or confidently predict investment returns. Do not instruct the user to buy or sell a specific security as a certainty. Explain data gaps. The agent is read-only and must not claim it executed actions."""
-            user = f"Question: {prompt}\n\nCurrent supplied portfolio data:\n{json.dumps(payload, default=str)}\n\nStructure your answer as: 1) executive summary; 2) measured portfolio facts; 3) plausible movement drivers and evidence gaps; 4) key risks; 5) questions or checks to consider. State if the quote data is insufficient."
-            with st.spinner("Calling OpenRouter…"):
-                try:
-                    response = requests.post("https://openrouter.ai/api/v1/chat/completions",
-                        headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json",
-                                 "HTTP-Referer":"http://localhost:8501","X-Title":"Investment Copilot"},
-                        json={"model":model,"messages":[{"role":"system","content":system},{"role":"user","content":user}],"temperature":0.2},timeout=90)
-                    response.raise_for_status()
-                    answer = response.json()["choices"][0]["message"]["content"]
-                    st.markdown(answer)
-                except requests.RequestException as exc:
-                    st.error(f"OpenRouter request failed: {exc}")
-                except (KeyError, IndexError, ValueError) as exc:
-                    st.error(f"Unexpected OpenRouter response: {exc}")
+            system = """Answer the user's portfolio question using only the evidence packet. Give a useful, specific explanation in at most five short bullets: lead with the measured answer, explain what it means for the portfolio, and state the main limitation. Cite every portfolio-specific or external factual claim immediately with exact supplied IDs such as [Q01], [F04], [H01] or [P01]. Never invent values, holdings, dates or references.
+
+For a named company question, first use `focus_company_exposures`. These are exact lookups across all currently sourced company rows, not only the largest 15. If a match is present, state its supplied value and portfolio share, the ETFs that hold it, and the issuer snapshot dates. If the user asks about impact, explain the supplied mechanical 20% sensitivity and its assumptions. If no match is present, say only that the company was not found in the currently loaded issuer snapshots; do not claim the portfolio has zero exposure. Mention `xray_coverage_pct` when it limits certainty. Separate a sourced direct company exposure from broader industry or market effects, which may not be measured. Do not give a definitive buy or sell instruction. This is educational analysis, and you are read-only."""
+            system += """
+
+Return ONLY the JSON object required by the response schema. Put each useful conclusion in a separate point. For every point, select one or more exact reference IDs from the packet's facts and sources in its `references` array; the app will display them as citations. Each reference must directly support that point. Never put citation brackets or reference IDs in the point text. Prefer a specific measured answer, explain what it means for this portfolio, and state the main limitation. Avoid generic commentary that does not help answer this question."""
+            user = f"Portfolio question: {request_question}\n\nEvidence packet with source dates and reference IDs:\n{evidence_text}"
+        with st.spinner(f"Waiting for OpenRouter ({model}; up to 30 seconds)…"):
+            return _openrouter_chat(
+                api_key,
+                model,
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format=_ai_citation_response_format(payload),
+            )
+
+    if briefing_clicked:
+        st.session_state.pop("_ai_portfolio_answer", None)
+        with st.spinner("Loading dated issuer holdings and calculating the briefing…"):
+            briefing_as_of, payload = _build_analyst_packet(
+                portfolio, quotes, fx_metadata, base_ccy, display_timezone
+            )
+        report = {
+            "as_of": briefing_as_of,
+            "timezone": display_timezone,
+            "evidence": payload,
+            "ai_risk_text": "",
+            "ai_uncertain_text": "",
+            "ai_commentary_text": "",
+            "ai_status": "",
+        }
+        st.session_state["_ai_analyst_report"] = report
+        st.session_state["_ai_analyst_evidence"] = {"as_of": briefing_as_of, "payload": payload}
+        if not api_key:
+            report["ai_status"] = (
+                "AI commentary was not sent because no API key is loaded. A .env file affects the app running on your computer; "
+                "for the online app, add OPENROUTER_API_KEY under Manage app → Settings → Secrets, then reboot the app."
+            )
+        else:
+            answer, error, elapsed = run_ai_request("", payload, "briefing")
+            if error:
+                report["ai_status"] = error + f" The measured briefing is still available."
+            else:
+                display_answer, format_issue = _format_structured_ai_answer(answer, payload)
+                issue = format_issue or _briefing_response_issue(display_answer, payload)
+                if issue:
+                    report["ai_draft_text"] = answer
+                    report["ai_status"] = f"OpenRouter replied in {elapsed:.1f} seconds, but its commentary could not be verified: {issue} The draft is available below with a warning; the measured briefing remains evidence-based. Model: {model}."
+                else:
+                    risk_heading = re.search(r"(?im)^##\s+Potential risks\b[^\n]*$", display_answer)
+                    uncertain_heading = re.search(r"(?im)^##\s+Uncertain scenarios and missing evidence\b[^\n]*$", display_answer)
+                    if (risk_heading and uncertain_heading and risk_heading.start() < uncertain_heading.start()):
+                        report["ai_risk_text"] = display_answer[risk_heading.end():uncertain_heading.start()].strip()
+                        report["ai_uncertain_text"] = display_answer[uncertain_heading.end():].strip()
+                    else:
+                        report["ai_commentary_text"] = display_answer
+                    report["ai_status"] = f"Cited AI commentary received in {elapsed:.1f} seconds using {model}."
+        st.session_state["_ai_analyst_report"] = report
+
+    if ask_question_clicked:
+        question = str(portfolio_question or "").strip()
+        if not question:
+            st.session_state["_ai_portfolio_answer"] = {
+                "question": "", "answer": "", "error": "Type a question first, then press Ask AI."
+            }
+        elif not api_key:
+            st.session_state["_ai_portfolio_answer"] = {
+                "question": question,
+                "answer": "",
+                "error": "AI could not answer because no API key is loaded. A .env file affects the app running on your computer; for the online app, add OPENROUTER_API_KEY under Manage app → Settings → Secrets, then reboot the app.",
+            }
+        else:
+            with st.spinner("Preparing current portfolio evidence for your question…"):
+                question_as_of, payload = _build_analyst_packet(
+                    portfolio, quotes, fx_metadata, base_ccy, display_timezone, question
+                )
+            answer, error, elapsed = run_ai_request(question, payload, "question")
+            if error:
+                st.session_state["_ai_portfolio_answer"] = {
+                    "question": question,
+                    "answer": "",
+                    "error": error,
+                    "as_of": question_as_of,
+                    "model": model,
+                    "sources": payload.get("sources", []),
+                    "company_matches": payload.get("focus_company_exposures", []),
+                    "company_lookup": payload.get("focus_company_lookup", {}),
+                    "xray_coverage_pct": payload.get("xray_coverage_pct", 0.0),
+                }
+            else:
+                display_answer, format_error = _format_structured_ai_answer(answer, payload)
+                refs_ok, refs_error = _valid_ai_refs(display_answer, payload) if not format_error else (False, format_error)
+                if refs_ok:
+                    st.session_state["_ai_portfolio_answer"] = {
+                        "question": question,
+                        "answer": display_answer,
+                        "error": "",
+                        "as_of": question_as_of,
+                        "elapsed": elapsed,
+                        "model": model,
+                        "sources": payload.get("sources", []),
+                        "company_matches": payload.get("focus_company_exposures", []),
+                        "company_lookup": payload.get("focus_company_lookup", {}),
+                        "xray_coverage_pct": payload.get("xray_coverage_pct", 0.0),
+                    }
+                else:
+                    st.session_state["_ai_portfolio_answer"] = {
+                        "question": question,
+                        "answer": answer,
+                        "error": f"OpenRouter replied, but the answer could not be verified: {refs_error} The unverified draft is available below. Total AI wait: {elapsed:.1f} seconds. Model: {model}.",
+                        "as_of": question_as_of,
+                        "model": model,
+                        "sources": payload.get("sources", []),
+                        "company_matches": payload.get("focus_company_exposures", []),
+                        "company_lookup": payload.get("focus_company_lookup", {}),
+                        "xray_coverage_pct": payload.get("xray_coverage_pct", 0.0),
+                    }
+
+    report = st.session_state.get("_ai_analyst_report")
+    question_result = st.session_state.get("_ai_portfolio_answer")
+    if report and report.get("ai_status"):
+        (st.success if report["ai_status"].startswith("Cited AI commentary") else st.error)(report["ai_status"])
+    if report and report.get("ai_draft_text"):
+        with st.expander("Unverified AI draft (not included in the evidence-based briefing)"):
+            st.warning("This provider reply did not pass the app's citation checks. Use the measured tables and source references below to verify any claim.")
+            st.markdown(report["ai_draft_text"])
+    if question_result:
+        if question_result.get("error"):
+            st.error(question_result["error"])
+        elif question_result.get("answer"):
+            st.markdown("### Answer to your question")
+            st.caption(f"Asked at {question_result.get('as_of', '—')} · {question_result.get('model', model)} · {question_result.get('elapsed', 0):.1f} seconds")
+        company_matches = question_result.get("company_matches", [])
+        if company_matches:
+            st.markdown("**Verified company exposure from issuer snapshots**")
+            st.caption(
+                "This direct look-through exposure is computed from the matched issuer rows. "
+                f"Overall X-Ray coverage is {european_percent(question_result.get('xray_coverage_pct', 0.0))}; "
+                "the 20% fall is a mechanical illustration, not a forecast."
+            )
+            company_rows = []
+            for item in company_matches:
+                issuer_dates = "; ".join(
+                    f"{snapshot.get('fund', '')}: {snapshot.get('as_of', '—')}"
+                    for snapshot in item.get("issuer_snapshot_dates", [])
+                ) or "Not supplied"
+                company_rows.append({
+                    "Company": item.get("label", ""),
+                    "Constituent ticker": item.get("ticker", "—"),
+                    f"Look-through value ({base_ccy})": european_number(item.get("exposure_value_reporting_currency")),
+                    "Portfolio share": european_percent(item.get("share_of_priced_positions_pct")),
+                    "Held through ETFs": item.get("held_through", "—"),
+                    "Issuer snapshot dates": issuer_dates,
+                    f"Portfolio change if it falls 20% ({base_ccy})": european_number(
+                        item.get("mechanical_effect_if_company_falls_20_pct_reporting_currency"), signed=True
+                    ),
+                    "Change to portfolio share": european_percent(
+                        item.get("mechanical_effect_if_company_falls_20_pct_of_portfolio"), signed=True
+                    ),
+                    "References": ", ".join([item.get("fact_ref", ""), *item.get("source_refs", [])]).strip(", "),
+                })
+            st.table(pd.DataFrame(company_rows))
+            st.caption("Illustration assumes only that company’s market value falls 20%, with all other prices and FX unchanged. It excludes tracking differences, fees, taxes and second-order effects. Open the source list to see each issuer file and its date.")
+        if question_result.get("error") and question_result.get("answer"):
+            with st.expander("Unverified AI answer draft"):
+                st.warning("This reply did not pass the app's source citation checks. Verify any claim against the source list before relying on it.")
+                st.markdown(question_result["answer"])
+        elif question_result.get("answer"):
+            st.markdown(question_result["answer"])
+        with st.expander("Sources for this answer"):
+            answer_sources = question_result.get("sources", [])
+            if answer_sources:
+                european_dataframe(pd.DataFrame(answer_sources), hide_index=True, column_config={
+                    "Reference": st.column_config.TextColumn(width="small"),
+                    "Source": st.column_config.TextColumn(width="medium"),
+                    "As of": st.column_config.TextColumn(width="small"),
+                    "Details": st.column_config.TextColumn(width="large"),
+                    "URL": st.column_config.LinkColumn("Source URL", display_text="Open source", width="small"),
+                })
+            else:
+                st.info("No external source records were available for this answer.")
+    report = st.session_state.get("_ai_analyst_report")
+    if report:
+        evidence = report["evidence"]
+        st.markdown(f"### Portfolio briefing · {report['as_of']} ({report['timezone']})")
+        st.caption("The briefing uses the latest available prices, FX rates and saved issuer holdings. Provider dates can be older than the briefing time; the tables show the dates available.")
+        st.subheader("Portfolio snapshot")
+        if evidence.get("positions"):
+            position_rows = []
+            for position in evidence["positions"]:
+                position_rows.append({
+                    "Instrument": position.get("ticker", ""),
+                    "Currency": position.get("listing_currency", "—") or "—",
+                    "Latest price": european_number(position.get("latest_price")) if position.get("latest_price") is not None else "Unavailable",
+                    "Price date / time": position.get("price_timing_local") or position.get("price_date") or "Unavailable",
+                    f"FX → {base_ccy}": european_number(position.get("fx_to_reporting_currency")) if position.get("fx_to_reporting_currency") is not None else "—",
+                    "FX date / time": position.get("fx_timing_local") or ("Same currency" if position.get("listing_currency") == base_ccy else "Unavailable"),
+                    f"Value ({base_ccy})": european_number(position.get("market_value_reporting_currency")) if position.get("market_value_reporting_currency") is not None else "Unavailable",
+                    "Portfolio share": european_percent(position.get("share_of_priced_positions_pct")) if position.get("share_of_priced_positions_pct") is not None else "Not priced",
+                    "Price ref": position.get("price_source_ref", "—"),
+                    "FX ref": position.get("fx_source_ref", "—"),
+                })
+            st.table(pd.DataFrame(position_rows))
+        else:
+            st.info("No open positions are available for this briefing.")
+
+        st.subheader("Measured facts")
+        if evidence["facts"]:
+            fact_rows = []
+            for fact in evidence["facts"]:
+                value = fact.get("Value")
+                unit = str(fact.get("Unit", ""))
+                if isinstance(value, (int, float, np.number)):
+                    if "%" in unit:
+                        value = european_percent(value)
+                    else:
+                        value = european_number(value)
+                    if unit and "%" not in unit:
+                        value = f"{value} {unit}"
+                fact_rows.append({
+                    "Ref": fact.get("ID", ""),
+                    "Fact": fact.get("Fact", ""),
+                    "Measured value": value,
+                    "Basis": fact.get("Basis", ""),
+                    "Sources": fact.get("Source refs", "None"),
+                })
+            st.table(pd.DataFrame(fact_rows))
+        else:
+            st.info("No measured portfolio facts are available yet.")
+
+        st.markdown("**ETF holdings data**")
+        holdings_coverage = evidence.get("issuer_holdings_coverage", [])
+        if holdings_coverage:
+            coverage_rows = []
+            for row in holdings_coverage:
+                coverage_rows.append({
+                    "Instrument": row.get("Fund", ""),
+                    "Issuer data date": row.get("As of", "—"),
+                    "Retrieved by app": row.get("Retrieved at", "—"),
+                    "Holdings weight reported": european_percent(row.get("Snapshot weight %")),
+                    f"Portfolio value represented ({base_ccy})": european_number(row.get("Look-through value")),
+                    "Coverage quality": row.get("Coverage", "—"),
+                    "Source": row.get("Source", "—"),
+                    "Source ref": row.get("Source refs", "—"),
+                })
+            st.table(pd.DataFrame(coverage_rows))
+        else:
+            st.info("No dated issuer holdings are saved for the priced positions in this portfolio.")
+
+        for section_title, exposure_key in (
+            ("Underlying company exposures", "underlying_company_exposures"),
+            ("Country exposures", "country_exposures"),
+            ("Sector exposures", "sector_exposures"),
+            ("Region exposures", "region_exposures"),
+        ):
+            exposures = evidence.get(exposure_key, [])
+            if exposures:
+                st.markdown(f"**{section_title}**")
+                exposure_rows = []
+                for row in exposures:
+                    exposure_row = {
+                        "Exposure": row.get("label", ""),
+                        f"Value ({base_ccy})": european_number(row.get("exposure_value_reporting_currency")),
+                        "Share of priced positions": european_percent(row.get("share_of_priced_positions_pct")),
+                    }
+                    if "etf_count" in row:
+                        exposure_row["ETF count"] = row["etf_count"]
+                        exposure_row["Held through"] = row.get("held_through", "")
+                    elif "held_through" in row:
+                        exposure_row["ETF count"] = row.get("etfs", "")
+                        exposure_row["Held through"] = row.get("held_through", "")
+                    exposure_row["Sources"] = ", ".join(row.get("source_refs", [])) or "Not available"
+                    exposure_rows.append(exposure_row)
+                st.table(pd.DataFrame(exposure_rows).head(10))
+
+        currency_rows = evidence.get("listing_currency_exposures", [])
+        if currency_rows:
+            st.markdown("**Listing-currency value split**")
+            st.caption("This is based on the currency each instrument trades in. It does not show the currencies of ETF constituents or whether a fund hedges currency risk.")
+            st.table(pd.DataFrame([{
+                "Listing currency": row["listing_currency"],
+                f"Value ({base_ccy})": european_number(row["exposure_value_reporting_currency"]),
+                "Share of priced positions": european_percent(row["share_of_priced_positions_pct"]),
+                "Sources": ", ".join(row["source_refs"]),
+            } for row in currency_rows]))
+
+        st.subheader("Potential risks")
+        risk_descriptions = {
+            "largest_instrument": lambda item: (
+                f"The largest single holding is **{item['ticker']}**, at "
+                f"{european_percent(item['share_pct'])} of priced positions. This measures position concentration, not the risk of a loss. [{item['ref']}]"
+            ),
+            "largest_company": lambda item: (
+                f"The largest sourced company exposure is **{item['label']}**, at "
+                f"{european_percent(item['share_of_priced_positions_pct'])} of priced positions. "
+                + (f"It appears through {item['etf_count']} ETFs ({item.get('held_through', '')}). " if item.get("etf_count", 0) > 1 else "")
+                + f"[{item['ref']}]"
+            ),
+            "largest_country": lambda item: (
+                f"The largest country exposure in the classified issuer holdings is **{item['label']}**, at "
+                f"{european_percent(item['share_of_priced_positions_pct'])} of priced positions. Unclassified and uncovered positions are excluded. [{item['ref']}]"
+            ),
+            "largest_sector": lambda item: (
+                f"The largest sourced sector exposure is **{item['label']}**, at "
+                f"{european_percent(item['share_of_priced_positions_pct'])} of priced positions. [{item['ref']}]"
+            ),
+            "largest_listing_currency": lambda item: (
+                f"**{item['listing_currency']}** is the trading currency for {european_percent(item['share_of_priced_positions_pct'])} of priced positions. "
+                f"This does not show the currencies of the assets inside the ETFs or whether they hedge FX, so underlying currency risk cannot be measured from this figure. [{item['ref']}]"
+            ),
+            "lookthrough_coverage": lambda item: (
+                f"Sourced issuer holdings cover {european_percent(item['share_pct'])} of priced-position value. "
+                f"Concentrations in the remaining share are not measured. [{item['ref']}]"
+            ),
+            "incomplete_valuation": lambda item: (
+                f"Some positions lack a current price or FX value, so portfolio percentages cover priced positions only. [{item['ref']}]"
+            ),
+            "country_data_missing": lambda item: (
+                f"Country concentration cannot be assessed because dated country classifications are unavailable. [{item['ref']}]"
+            ),
+        }
+        risks = evidence.get("potential_risks", [])
+        if risks:
+            for risk in risks:
+                formatter = risk_descriptions.get(risk.get("type"))
+                if formatter:
+                    st.markdown(f"- {formatter(risk)}")
+        else:
+            st.info("There is not enough priced or sourced information to identify portfolio concentrations.")
+        if report.get("ai_risk_text"):
+            st.markdown("**AI interpretation**")
+            st.markdown(report["ai_risk_text"])
+        if report.get("ai_commentary_text"):
+            st.markdown("**Cited AI commentary**")
+            st.markdown(report["ai_commentary_text"])
+
+        st.subheader("Uncertain scenarios and missing evidence")
+        scenario = evidence.get("stress_scenario")
+        if scenario:
+            impact_pct = european_percent(scenario["mechanical_change_as_share_of_priced_positions_pct"], signed=True)
+            impact_value = european_number(scenario["mechanical_portfolio_value_change_reporting_currency"], signed=True)
+            exposure_pct = european_percent(scenario["sourced_exposure_share_of_priced_positions_pct"])
+            if scenario.get("scenario_type") == "country":
+                scenario_text = (
+                    f"If the sourced {scenario['market']} holdings fall by {european_percent(abs(scenario['assumed_market_change_pct']))}, "
+                    f"they represent {exposure_pct} of priced positions. The mechanical direct portfolio change is "
+                    f"**{impact_value} {base_ccy} ({impact_pct})**."
+                )
+            else:
+                scenario_text = (
+                    f"Country data is unavailable, so this uses the largest instrument, **{scenario['market']}**. "
+                    f"If its price falls by {european_percent(abs(scenario['assumed_market_change_pct']))}, it represents {exposure_pct} of priced positions. "
+                    f"The mechanical direct portfolio change is **{impact_value} {base_ccy} ({impact_pct})**."
+                )
+            st.markdown(f"**{scenario['ID']} · Mechanical stress example**\n\n{scenario_text}")
+            st.caption("Assumptions: " + " ".join(scenario["assumptions"]) + f" Sources: {', '.join(scenario['source_refs']) or 'none'}.")
+        else:
+            st.info("There is no priced position to calculate a market-shock example from.")
+        if report.get("ai_uncertain_text"):
+            st.markdown("**AI interpretation**")
+            st.markdown(report["ai_uncertain_text"])
+        if evidence.get("data_gaps"):
+            st.markdown("**Known data gaps**")
+            st.table(pd.DataFrame([{
+                "Missing data": gap.get("item", "Data"),
+                "What this limits": gap.get("gap", "Not available"),
+            } for gap in evidence["data_gaps"]]))
+        else:
+            st.markdown("**Known data gaps**\n\nNo gaps were detected in the supplied evidence packet; this does not guarantee that all external data is complete.")
+        with st.expander("Source references"):
+            if evidence["sources"]:
+                source_table = pd.DataFrame(evidence["sources"])
+                european_dataframe(source_table, hide_index=True, column_config={
+                    "Reference": st.column_config.TextColumn(width="small"),
+                    "Source": st.column_config.TextColumn(width="medium"),
+                    "As of": st.column_config.TextColumn(width="small"),
+                    "Details": st.column_config.TextColumn(width="large"),
+                    "URL": st.column_config.LinkColumn("Source URL", display_text="Open source", width="small"),
+                })
+            else:
+                st.info("No external source records were available for this briefing.")
     with st.expander("Data sent to the AI provider"):
-        st.write("Only the selected question, current portfolio/ledger summary and displayed quote data are sent to OpenRouter when you run an analysis. Do not include sensitive personal details in the prompt.")
+        st.write("When you build a briefing or ask a question, OpenRouter receives the relevant prompt, current position values, price and FX dates, selected X-Ray exposure summaries, and source references. A company-specific question also sends matching company rows from the full sourced exposure table, with their issuer dates and calculated portfolio shares; the complete issuer holdings files and transaction ledger are not sent. Do not include sensitive personal details in prompts.")
 
 elif page == "Forecast Lab":
     st.title("Forecast Lab")
@@ -1939,13 +2665,13 @@ elif page == "Methodology & data":
 - **Snapshots:** Manual snapshots use the selected reporting currency. The scheduled worker records a PLN snapshot only when valuation is complete. Snapshots are point-in-time values, not returns.
 - **Performance page:** The ETF-holdings return proxy chain-links weighted adjusted-close returns using quantities from the ledger. A selected benchmark is converted to the same reporting currency and compared over common dates. It excludes broker cash, taxes, withholding, non-ETF holdings and exact intraday trade-time effects. The separate XIRR is approximate and is not a broker-reconciled account return.
 - **Data gaps:** Short forward-fills are limited to three observations for aligning exchange/FX holiday calendars; longer gaps stop a comparison segment. Historical risk calculations do not forward-fill the underlying histories.
-- **Instrument master, watchlist and constituent sources:** User-managed metadata and symbols are stored in SQLite. Portfolio X-Ray automatically retrieves dated holdings for supported Amundi, iShares, Vanguard and Xtrackers ETFs; imported CSV snapshots remain available for other providers. Source name, link and holdings date are retained. Partial snapshots are not expanded to 100%, and sector/country/region views use source classifications (or a broad region derived from the supplied country).
+- **Instrument master, watchlist and constituent sources:** User-managed metadata and symbols are stored in SQLite. Portfolio X-Ray directly retrieves dated holdings for mapped Vanguard EU funds, Xtrackers funds with a known ISIN, iShares INDA/MCHI, and State Street SPYL; imported CSV snapshots remain available for other funds. Source name, link and holdings date are retained. Partial snapshots are not expanded to 100%, and sector/country/region views use source classifications (or a broad region derived from the supplied country).
 - **Scheduled worker:** `scripts/market_data_worker.py` periodically refreshes quotes and history. It is read-only and does not trade. Provider requests can fail or be throttled; inspect the run log under Data operations.
 - **Forecasts:** Monte Carlo scenarios use fixed user inputs and simplified lognormal monthly returns. Real-value result labels follow the selected reporting currency. The assumptions do not account for changing volatility regimes, fat tails, valuation levels or guaranteed outcomes.
 
 ### Security
 - Keep `.env` local and never commit secrets. `.gitignore` excludes it and the data directory.
-- The AI analyst sends the selected prompt and current summary to OpenRouter only after you click Analyze. Do not place sensitive personal information in prompts.
+- The AI analyst sends the standard briefing request or your typed question with current portfolio evidence to OpenRouter only after you choose **Build portfolio briefing** or **Ask AI**. Do not place sensitive personal information in prompts.
 - The application does not log in to a broker, place orders, store broker credentials, or execute trades.
 - Before internet-facing deployment, add user authentication, per-user database isolation, secret management, HTTPS, backups and operational monitoring.
     """)

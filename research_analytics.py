@@ -55,9 +55,9 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
     snapshots above 110% are excluded as likely data errors.
     """
     company_columns = ["constituent_ticker", "constituent_name", "exposure_value", "portfolio_weight_pct", "etf_count", "held_through"]
-    category_columns = ["category", "exposure_value", "portfolio_weight_pct", "constituents", "etfs"]
+    category_columns = ["category", "exposure_value", "portfolio_weight_pct", "constituents", "etfs", "held_through"]
     asset_columns = ["Underlying asset", "exposure_value", "portfolio_weight_pct", "held_through"]
-    coverage_columns = ["Fund", "Position value", "Snapshot weight %", "Look-through value", "As of", "Source", "Coverage"]
+    coverage_columns = ["Fund", "Position value", "Snapshot weight %", "Look-through value", "As of", "Retrieved at", "Source", "Coverage"]
     empty = {
         "companies": pd.DataFrame(columns=company_columns),
         "assets": pd.DataFrame(columns=asset_columns),
@@ -89,7 +89,7 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
         result["priced_positions"] = len(positions)
         result["coverage"] = pd.DataFrame([
             {"Fund": row.ticker, "Position value": row.position_value, "Snapshot weight %": 0.0,
-             "Look-through value": 0.0, "As of": "—", "Source": "—", "Coverage": "No imported snapshot"}
+             "Look-through value": 0.0, "As of": "—", "Retrieved at": "—", "Source": "—", "Coverage": "No imported snapshot"}
             for row in positions.itertuples(index=False)
         ], columns=coverage_columns)
         return result
@@ -116,7 +116,7 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
         fund_rows = source[source["fund_ticker"] == fund].copy()
         if fund_rows.empty:
             coverage_rows.append({"Fund": fund, "Position value": position_value, "Snapshot weight %": 0.0,
-                                  "Look-through value": 0.0, "As of": "—", "Source": "—",
+                                  "Look-through value": 0.0, "As of": "—", "Retrieved at": "—", "Source": "—",
                                   "Coverage": "No imported snapshot"})
             continue
         source_weight = float(fund_rows["weight_pct"].clip(lower=0).sum())
@@ -126,6 +126,7 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
             coverage_rows.append({"Fund": fund, "Position value": position_value,
                                   "Snapshot weight %": source_weight, "Look-through value": 0.0,
                                   "As of": ", ".join(as_of_values) or "—",
+                                  "Retrieved at": ", ".join(sorted(value for value in fund_rows["imported_at"].dropna().astype(str).unique())) if "imported_at" in fund_rows else "—",
                                   "Source": ", ".join(sources) or "—",
                                   "Coverage": "Excluded: snapshot exceeds 110%"})
             continue
@@ -143,6 +144,7 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
         coverage_rows.append({"Fund": fund, "Position value": position_value,
                               "Snapshot weight %": source_weight, "Look-through value": fund_covered_value,
                               "As of": ", ".join(as_of_values) or "—",
+                              "Retrieved at": ", ".join(sorted(value for value in fund_rows["imported_at"].dropna().astype(str).unique())) if "imported_at" in fund_rows else "—",
                               "Source": ", ".join(sources) or "—", "Coverage": coverage_label})
         fund_rows["effective_weight_pct"] = fund_rows["weight_pct"].clip(lower=0) * scale
         fund_rows["exposure_value"] = position_value * fund_rows["effective_weight_pct"] / 100.0
@@ -219,6 +221,7 @@ def calculate_portfolio_xray(portfolio: pd.DataFrame, holdings: pd.DataFrame) ->
                     exposure_value=("exposure_value", "sum"),
                     constituents=("_company_key", "nunique"),
                     etfs=("fund_ticker", "nunique"),
+                    held_through=("fund_ticker", lambda values: ", ".join(sorted(set(values)))),
                 )
                 summary["portfolio_weight_pct"] = summary["exposure_value"] / portfolio_value * 100.0
                 return summary[category_columns].sort_values("exposure_value", ascending=False, ignore_index=True)

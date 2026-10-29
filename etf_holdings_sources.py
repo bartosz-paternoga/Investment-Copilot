@@ -1,7 +1,8 @@
-"""Fetch sourced ETF constituent snapshots from public issuer holdings pages.
+"""Fetch dated ETF constituent snapshots from public issuer data sources.
 
-The optional scraper adapters read public Amundi, iShares, Vanguard and
-Xtrackers listings/holdings. No portfolio values are sent to those providers.
+Common European funds use the issuers' public APIs directly so the app does
+not depend on an optional third-party scraper being installed. The optional
+adapters remain as a fallback for other supported issuers.
 """
 from __future__ import annotations
 
@@ -60,6 +61,36 @@ ISHARES_US_HOLDINGS = {
     "MCHI": "https://www.ishares.com/us/products/239619/ishares-msci-china-etf/latest-holdings.csv",
 }
 SSGA_SPYL_HOLDINGS_URL = "https://www.ssga.com/library-content/products/fund-data/etfs/emea/holdings-daily-emea-en-spyl-gy.xlsx"
+XTRACKERS_HOLDINGS_URL = "https://etf.dws.com/etfdata/export/ITA/ITA/csv/product/constituent/{isin}/"
+VANGUARD_EU_GRAPHQL_URL = "https://www.ie.vanguard/gpx/graphql"
+VANGUARD_EU_CONSUMER_ID = "ie0"
+VANGUARD_EU_PORT_IDS = {
+    "IE00BK5BQT80": "9679",  # FTSE All-World UCITS ETF (USD) Accumulating
+}
+VANGUARD_EU_PRODUCT_URLS = {
+    "IE00BK5BQT80": "https://www.nl.vanguard/professional/product/etf/equity/9679/ftse-all-world-ucits",
+}
+VANGUARD_EU_EQUITY_TYPES = [
+    "EQ.DRCPT", "EQ.ETF", "EQ.FSH", "EQ.PREF", "EQ.PSH", "EQ.REIT",
+    "EQ.RIGHT", "EQ.STOCK", "EQ.WRT",
+]
+VANGUARD_EU_HOLDINGS_QUERY = """
+query FundsHoldingsQuery($portIds: [String!], $securityTypes: [String!], $lastItemKey: String) {
+  funds(portIds: $portIds) {
+    profile { fundFullName fundCurrency primarySectorEquityClassification }
+  }
+  borHoldings(portIds: $portIds) {
+    holdings(limit: 1500, securityTypes: $securityTypes, lastItemKey: $lastItemKey) {
+      items {
+        issuerName securityLongDescription gicsSectorDescription icbSectorDescription
+        icbIndustryDescription marketValuePercentage sedol1 quantity ticker securityType
+        effectiveDate marketValueBaseCurrency bloombergIsoCountry
+      }
+      totalHoldings lastItemKey
+    }
+  }
+}
+"""
 
 # These are exchange-traded products, not share-holding ETFs. Their issuer
 # documentation identifies one underlying asset, so show that explicitly in
@@ -104,7 +135,17 @@ def _valid_isin(value: str) -> bool:
 
 def _parse_weight_fraction(value: Any, percentage_points: bool = False) -> float:
     """Convert an issuer weight to a fraction, accepting either 0.08 or 8.0% formats."""
-    text = str(value or "").strip().replace(",", "")
+    if value is None or value is pd.NA:
+        return float("nan")
+    text = str(value).strip().replace("\u00a0", "").replace(" ", "")
+    # European issuer files commonly use comma decimals. A comma-only value
+    # cannot be a grouped thousands value for a portfolio percentage, so read
+    # it as a decimal separator. US-style grouping commas are removed when a
+    # decimal point is also present.
+    if "," in text and "." not in text:
+        text = text.replace(",", ".")
+    else:
+        text = text.replace(",", "")
     has_percent = text.endswith("%")
     if has_percent:
         text = text[:-1].strip()
@@ -128,14 +169,23 @@ def _direct_snapshot(
     equity_only: bool = False,
 ) -> dict[str, Any]:
     """Convert a direct issuer download into the app's saved snapshot format."""
-    name_col = _pick_column(frame, ("name", "holding_name", "security_name"))
-    ticker_col = _pick_column(frame, ("ticker", "symbol"))
-    weight_col = _pick_column(frame, ("weight", "weight_pct", "weight_percent", "weight_%", "percent_of_fund"))
-    type_col = _pick_column(frame, ("type", "asset_class"))
+    name_col = _pick_column(frame, (
+        "name", "holding_name", "security_name", "issuer_name", "security_long_description",
+        "company_name", "nome", "denominazione", "titolo",
+    ))
+    ticker_col = _pick_column(frame, ("ticker", "symbol", "sedol", "sedol1", "isin", "codice"))
+    weight_col = _pick_column(frame, (
+        "weight", "weight_pct", "weight_percent", "weight_%", "percent_of_fund",
+        "market_value_percentage", "percent_of_market_value", "portfolio_weight",
+        "weight_in_percent", "weight_in_%", "portfolio_weighting", "weighting_pct",
+        "peso", "percentuale",
+    ))
+    type_col = _pick_column(frame, ("type", "asset_class", "security_type"))
     if name_col is None or weight_col is None:
         raise ValueError("the issuer download did not contain recognizable name and weight columns")
     if equity_only and type_col:
-        equity_rows = frame[type_col].fillna("").astype(str).str.strip().str.upper().isin({"EQUITY", "STOCK"})
+        type_values = frame[type_col].fillna("").astype(str).str.strip().str.upper()
+        equity_rows = type_values.isin({"EQUITY", "STOCK"}) | type_values.str.startswith("EQ.")
         if equity_rows.any():
             frame = frame.loc[equity_rows].copy()
 
@@ -149,12 +199,21 @@ def _direct_snapshot(
     # expects a fraction (0.0621) and converts it to percentage points once.
     weight_values = frame[weight_col].map(lambda value: _parse_weight_fraction(value))
     weight_labels = frame[weight_col].fillna("").astype(str)
-    percentage_points = bool(weight_labels.str.contains("%", regex=False).any()) or bool(
-        pd.to_numeric(weight_values, errors="coerce").abs().max() > 1
+    numeric_weights = pd.to_numeric(weight_values, errors="coerce").dropna()
+    raw_total = float(numeric_weights.clip(lower=0).sum()) if not numeric_weights.empty else 0.0
+    percentage_points = bool(weight_labels.str.contains("%", regex=False).any()) or (
+        90.0 <= raw_total <= 110.0
+        or (not numeric_weights.empty and raw_total > 1.0 and numeric_weights.abs().max() > 1.0)
     )
     rows["weight"] = frame[weight_col].map(lambda value: _parse_weight_fraction(value, percentage_points))
-    sector_col = _pick_column(frame, ("sector", "sector_classification"))
-    country_col = _pick_column(frame, ("country", "country_name", "country_code", "trade_country_name", "location"))
+    sector_col = _pick_column(frame, (
+        "sector", "sector_classification", "gics_sector_description", "icb_sector_description",
+        "icb_industry_description", "settore",
+    ))
+    country_col = _pick_column(frame, (
+        "country", "country_name", "country_code", "country_of_risk", "country_of_domicile",
+        "trade_country_name", "location", "bloomberg_iso_country", "paese", "paese_di_rischio",
+    ))
     region_col = _pick_column(frame, ("region",))
     rows["sector"] = frame[sector_col].map(_source_text) if sector_col else ""
     rows["country"] = frame[country_col].map(_source_text) if country_col else ""
@@ -237,6 +296,149 @@ def _fetch_ssga_spyl(fund: str, isin: str) -> dict[str, Any]:
     return _direct_snapshot(fund, isin, "State Street", frame, source_url=SSGA_SPYL_HOLDINGS_URL, equity_only=True)
 
 
+def _csv_holdings_frame(text: str, *, max_header_lines: int = 60) -> pd.DataFrame:
+    """Find and parse a CSV header even when an issuer adds a title preamble."""
+    lines = text.lstrip("\ufeff").splitlines()
+    name_headers = {
+        "name", "holdingname", "securityname", "issuername", "securitylongdescription",
+        "companyname", "nome", "denominazione", "titolo",
+    }
+    weight_headers = {
+        "weight", "weightpct", "weightpercent", "weightinpercent", "portfolioweight",
+        "marketvaluepercentage", "percentofmarketvalue", "percentofmarketvalue",
+        "peso", "percentuale",
+    }
+    for line_index, line in enumerate(lines[:max_header_lines]):
+        delimiter = max((",", ";", "\t", "|"), key=line.count)
+        if line.count(delimiter) < 1:
+            continue
+        try:
+            headers = next(csv.reader([line], delimiter=delimiter))
+        except (csv.Error, StopIteration):
+            continue
+        normalized = {
+            re.sub(r"[^a-z0-9]", "", str(value).strip().strip('"').lower())
+            for value in headers
+        }
+        has_name = bool(normalized & name_headers) or any("holdingname" in value for value in normalized)
+        has_weight = bool(normalized & weight_headers) or any(
+            "weight" in value or "percentofmarketvalue" in value for value in normalized
+        )
+        if has_name and has_weight:
+            frame = pd.read_csv(StringIO("\n".join(lines[line_index:])), sep=delimiter, dtype=str)
+            frame.columns = [str(column).strip() for column in frame.columns]
+            return frame.dropna(how="all")
+    raise ValueError("issuer CSV did not contain recognizable name and weight columns")
+
+
+def _extract_source_date(text: str) -> str:
+    """Read an explicit as-of date from an issuer file preamble, if present."""
+    for line in text.splitlines()[:20]:
+        if not re.search(r"as\s*of|holdings|portfolio|data|date|aggiorn|rifer", line, re.I):
+            continue
+        match = re.search(r"\b(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]20\d{2})\b", line)
+        if match:
+            parsed = pd.to_datetime(match.group(1), errors="coerce", dayfirst=True)
+            if not pd.isna(parsed):
+                return parsed.date().isoformat()
+    return ""
+
+
+def _fetch_xtrackers_holdings(fund: str, isin: str) -> dict[str, Any]:
+    """Download the official DWS/Xtrackers constituent CSV by ISIN."""
+    url = XTRACKERS_HOLDINGS_URL.format(isin=isin)
+    response = requests.get(
+        url,
+        timeout=30,
+        headers={"User-Agent": "InvestmentCopilot/1.0 (public issuer holdings)"},
+    )
+    response.raise_for_status()
+    text = response.content.decode("utf-8-sig", errors="replace")
+    frame = _csv_holdings_frame(text)
+    as_of = _source_as_of(frame)
+    if as_of == date.today().isoformat():
+        as_of = _extract_source_date(text) or as_of
+    return _direct_snapshot(fund, isin, "Xtrackers", frame, source_url=url, as_of=as_of, equity_only=True)
+
+
+def _fetch_vanguard_eu_holdings(fund: str, isin: str) -> dict[str, Any]:
+    """Download all published Vanguard EU equity rows through its public GraphQL API."""
+    port_id = VANGUARD_EU_PORT_IDS.get(isin)
+    if not port_id:
+        raise ValueError(f"No Vanguard EU product id is mapped for ISIN {isin}")
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Consumer-ID": VANGUARD_EU_CONSUMER_ID,
+        "User-Agent": "InvestmentCopilot/1.0 (public issuer holdings)",
+    }
+    rows: list[dict[str, Any]] = []
+    profile: dict[str, Any] = {}
+    last_item_key: str | None = None
+    pagination_complete = False
+    for _ in range(50):
+        response = requests.post(
+            VANGUARD_EU_GRAPHQL_URL,
+            json={
+                "query": VANGUARD_EU_HOLDINGS_QUERY,
+                "variables": {
+                    "portIds": [port_id],
+                    "securityTypes": VANGUARD_EU_EQUITY_TYPES,
+                    "lastItemKey": last_item_key,
+                },
+            },
+            timeout=30,
+            headers=headers,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("errors"):
+            messages = "; ".join(str(item.get("message", "GraphQL error")) for item in payload["errors"])
+            raise ValueError(f"Vanguard holdings API: {messages[:500]}")
+        data = payload.get("data") or {}
+        funds = data.get("funds") or []
+        if funds and isinstance(funds[0], dict):
+            profile = profile or (funds[0].get("profile") or {})
+        provider_holdings = data.get("borHoldings") or []
+        if not provider_holdings or not isinstance(provider_holdings[0], dict):
+            break
+        holdings = provider_holdings[0].get("holdings") or {}
+        page_rows = holdings.get("items") or []
+        rows.extend(row for row in page_rows if isinstance(row, dict))
+        next_key = holdings.get("lastItemKey")
+        if not next_key or str(next_key) == str(last_item_key):
+            pagination_complete = True
+            break
+        last_item_key = str(next_key)
+
+    if not pagination_complete:
+        raise ValueError("Vanguard holdings pagination did not finish; refusing to save an incomplete snapshot")
+    if not rows:
+        raise ValueError(f"Vanguard returned no equity holdings for product {port_id}")
+
+    frame = pd.DataFrame(rows)
+    sector_preference = str(profile.get("primarySectorEquityClassification") or "").strip().casefold()
+    if sector_preference == "icb sectors":
+        frame["sector"] = frame.get("icbSectorDescription", pd.Series("", index=frame.index)).fillna("")
+        if "icbIndustryDescription" in frame:
+            frame["sector"] = frame["sector"].where(frame["sector"].astype(str).str.strip() != "", frame["icbIndustryDescription"])
+    else:
+        frame["sector"] = frame.get("gicsSectorDescription", pd.Series("", index=frame.index))
+    frame["name"] = frame.get("issuerName", pd.Series("", index=frame.index)).fillna("")
+    if "securityLongDescription" in frame:
+        frame["name"] = frame["name"].where(frame["name"].astype(str).str.strip() != "", frame["securityLongDescription"])
+    ticker_values = frame.get("ticker", pd.Series("", index=frame.index)).fillna("").astype(str).str.strip()
+    sedol_values = frame.get("sedol1", pd.Series("", index=frame.index)).fillna("").astype(str).str.strip()
+    frame["ticker"] = ticker_values.where(ticker_values != "", sedol_values)
+    frame["country"] = frame.get("bloombergIsoCountry", pd.Series("", index=frame.index))
+    frame["weight"] = frame.get("marketValuePercentage", pd.Series(pd.NA, index=frame.index))
+    source_url = VANGUARD_EU_PRODUCT_URLS.get(isin, ISSUER_HOME["Vanguard"])
+    as_of = _source_as_of(frame)
+    return _direct_snapshot(
+        fund, isin, "Vanguard", frame, source_url=source_url, as_of=as_of, equity_only=True
+    )
+
+
 def _single_asset_snapshot(fund: str, isin: str) -> dict[str, Any]:
     name, symbol, category, source_url = SINGLE_ASSET_EXPOSURES[fund]
     rows = pd.DataFrame([{
@@ -270,7 +472,7 @@ def _source_classes() -> list[tuple[str, Any]]:
         )
     except ImportError as exc:
         raise RuntimeError(
-            "The issuer holdings connector is not installed. Restart the app so its dependencies can finish installing."
+            "No optional fallback adapter is installed for this issuer. Built-in downloads cover Vanguard EU, Xtrackers, iShares US, and State Street SPYL."
         ) from exc
     return [
         ("Amundi", AmundiScraper),
@@ -299,7 +501,7 @@ def _pick_column(frame: pd.DataFrame, names: tuple[str, ...]) -> str | None:
 def _source_as_of(frame: pd.DataFrame) -> str:
     date_column = _pick_column(
         frame,
-        ("as_of", "asof", "as_of_date", "holdings_date", "portfolio_date", "report_date", "date"),
+        ("as_of", "asof", "as_of_date", "holdings_date", "portfolio_date", "report_date", "effective_date"),
     )
     if date_column:
         dates = pd.to_datetime(frame[date_column], errors="coerce", utc=True).dropna()
@@ -331,8 +533,25 @@ def fetch_issuer_holdings(fund_ticker: str, isin: str = "") -> dict[str, Any]:
     if fund == "SPYL.DE":
         return _fetch_ssga_spyl(fund, resolved_isin)
 
-    all_sources = _source_classes()
     preferred_issuer = KNOWN_ISIN_ISSUERS.get(resolved_isin)
+    direct_source_error = ""
+    if preferred_issuer == "Xtrackers":
+        try:
+            return _fetch_xtrackers_holdings(fund, resolved_isin)
+        except Exception as exc:
+            direct_source_error = f"Xtrackers official download: {exc}"
+    elif preferred_issuer == "Vanguard" and resolved_isin in VANGUARD_EU_PORT_IDS:
+        try:
+            return _fetch_vanguard_eu_holdings(fund, resolved_isin)
+        except Exception as exc:
+            direct_source_error = f"Vanguard official API: {exc}"
+
+    try:
+        all_sources = _source_classes()
+    except RuntimeError as exc:
+        if direct_source_error:
+            raise ValueError(f"Could not load {fund} from {direct_source_error}") from exc
+        raise
     # For a known ISIN use the matching provider only. For other funds, search
     # the supported providers in turn, using their catalog as the identifier
     # lookup.
@@ -341,7 +560,7 @@ def fetch_issuer_holdings(fund_ticker: str, isin: str = "") -> dict[str, Any]:
         if preferred_issuer
         else all_sources
     )
-    failures = []
+    failures = [direct_source_error] if direct_source_error else []
     for issuer, scraper_class in sources:
         try:
             scraper = scraper_class()
