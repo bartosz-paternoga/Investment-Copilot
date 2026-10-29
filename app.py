@@ -832,7 +832,6 @@ for currency in set(portfolio.get("currency", pd.Series(dtype=str)).fillna("").a
         market_data_status_tickers.add(info["ticker"])
 market_data_status = quotes[quotes["ticker"].isin(market_data_status_tickers)] if "ticker" in quotes else pd.DataFrame()
 metrics = portfolio_metrics(portfolio, base_ccy)
-_clear_auth_transition_overlay()
 
 
 def european_number(value, decimals=2, suffix="", signed=False):
@@ -2650,3 +2649,8 @@ elif page == "Methodology & data":
     st.code('OPENROUTER_API_KEY=""\nOPENROUTER_MODEL=openrouter/free', language="dotenv")
     st.subheader("Database backup")
     st.write("The database defaults to `data/portfolio.sqlite3`. The online backup script `./scripts/backup_db.sh` uses SQLite's backup API, including when WAL is enabled. Keep backups outside version control and test restoring a copy. Export transactions to CSV from the Transactions page for a readable ledger copy.")
+
+# Keep the startup status visible until the selected page has finished rendering.
+# Clearing it after authentication/data loading but before page rendering left a
+# blank interval while the rest of a cold-start rerun was still working.
+_clear_auth_transition_overlay()
