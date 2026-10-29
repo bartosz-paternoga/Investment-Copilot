@@ -27,6 +27,7 @@ from portfolio import (
     initialize_db, list_instruments, list_transactions, list_watchlist, portfolio_metrics, read_snapshots,
     remove_watchlist_ticker, save_instrument, save_snapshot, simulate_forecast, transaction_types_summary,
     replace_quick_position, remove_ticker_from_portfolio,
+    get_preferred_start_page, set_preferred_start_page,
     resolve_position_currency,
     get_fx_history, get_history_fetch_times, save_etf_holdings, list_etf_holdings, read_market_data_runs, market_data_cache_summary,
 )
@@ -615,12 +616,62 @@ else:
 
 
 PAGES = ["Overview", "Investments", "Transactions", "Performance", "ETF Research", "Watchlist", "Holdings & risk", "Portfolio X-Ray", "Market analysis", "AI Analyst", "Forecast Lab", "Data operations", "Methodology & data"]
+user_key = str(_current_user["user_id"]) if _current_user is not None else "local"
+workspace_token = str(st.session_state.get("auth_session_token", ""))
+workspace_session_key = hashlib.sha256(workspace_token.encode("utf-8")).hexdigest() if workspace_token else user_key
+if st.session_state.get("_workspace_session_key") != workspace_session_key:
+    pinned_start_page = get_preferred_start_page()
+    if pinned_start_page not in PAGES:
+        pinned_start_page = None
+    st.session_state["_pinned_start_page"] = pinned_start_page
+    st.session_state["workspace_page"] = pinned_start_page or "Overview"
+    st.session_state["_workspace_session_key"] = workspace_session_key
+else:
+    pinned_start_page = st.session_state.get("_pinned_start_page")
+    if pinned_start_page not in PAGES:
+        pinned_start_page = None
+    if st.session_state.get("workspace_page") not in PAGES:
+        st.session_state["workspace_page"] = pinned_start_page or "Overview"
+
 st.sidebar.markdown('''<div class="brand-lockup"><div class="brand-mark">IP</div><div><div class="brand-name">Investment Copilot</div><div class="brand-caption">INVESTOR PORTFOLIO</div></div></div>''', unsafe_allow_html=True)
 st.sidebar.caption(f"Version {APP_VERSION}")
-page = st.sidebar.radio("Workspace", PAGES, index=0, label_visibility="collapsed", key="workspace_page")
+st.sidebar.caption("Workspace")
+st.sidebar.caption("Pin a page to open it first after sign-in.")
+for workspace_item in PAGES:
+    item_key = re.sub(r"[^a-z0-9]+", "_", workspace_item.casefold()).strip("_")
+    nav_column, pin_column = st.sidebar.columns([0.84, 0.16], gap="small")
+    with nav_column:
+        if st.button(
+            workspace_item,
+            type="primary" if st.session_state.get("workspace_page") == workspace_item else "tertiary",
+            width="stretch",
+            key=f"workspace_nav_{item_key}",
+        ):
+            st.session_state["workspace_page"] = workspace_item
+            st.rerun()
+    with pin_column:
+        is_pinned = pinned_start_page == workspace_item
+        if st.button(
+            "📌" if is_pinned else "☆",
+            type="tertiary",
+            width="stretch",
+            help=(
+                f"Unpin {workspace_item}; Overview will open first after sign-in."
+                if is_pinned else f"Pin {workspace_item} as the first page after sign-in."
+            ),
+            key=f"workspace_pin_{item_key}",
+        ):
+            pinned_start_page = None if is_pinned else workspace_item
+            set_preferred_start_page(pinned_start_page)
+            st.session_state["_pinned_start_page"] = pinned_start_page
+            st.toast(
+                f"{workspace_item} will open first after your next sign-in."
+                if pinned_start_page else "Start page unpinned. Overview will open first after your next sign-in."
+            )
+            st.rerun()
+page = st.session_state.get("workspace_page", "Overview")
 base_ccy = st.sidebar.selectbox("Reporting currency", ["PLN", "EUR", "USD", "GBP"], index=0)
 transactions = list_transactions()
-user_key = str(_current_user["user_id"]) if _current_user is not None else "local"
 # Transaction analytics can involve historical FX lookups. Cache it within this
 # user's Streamlit session and invalidate it whenever the ledger or currency changes.
 # The user ID in the key prevents reuse across accounts in the same browser session.
@@ -1060,6 +1111,101 @@ def display_position_table(data: pd.DataFrame):
         "Status": st.column_config.TextColumn(width="small"),
     }, row_height=34)
 
+
+def render_data_confidence_panel(*, benchmark: dict | None = None):
+    """Summarize freshness, valuation coverage, and benchmark date alignment."""
+    if portfolio.empty:
+        return
+
+    total_positions = len(portfolio)
+    stale_count = int(
+        portfolio.get("status", pd.Series(index=portfolio.index, dtype=str))
+        .fillna("").astype(str).str.casefold().eq("stale").sum()
+    )
+    priced_count = int(portfolio.get("price", pd.Series(index=portfolio.index, dtype=float)).notna().sum())
+    valued_count = int(portfolio.get("market_value_base", pd.Series(index=portfolio.index, dtype=float)).notna().sum())
+    cost_count = int(portfolio.get("unrealized_pl_base", pd.Series(index=portfolio.index, dtype=float)).notna().sum())
+
+    held_quotes = quotes[quotes.get("ticker", pd.Series(dtype=str)).astype(str).str.upper().isin(active_tickers)] if not quotes.empty else pd.DataFrame()
+    fetched_at = pd.to_datetime(held_quotes.get("fetched_at", pd.Series(dtype=str)), errors="coerce", utc=True).dropna()
+    latest_fetch = local_market_time(fetched_at.max()) if not fetched_at.empty else "Unavailable"
+    parsed_price_dates = pd.to_datetime(portfolio.get("price_date", pd.Series(dtype=str)), errors="coerce")
+    source_dates = parsed_price_dates.dropna()
+    dated_price_count = int(parsed_price_dates.notna().sum())
+    undated_price_count = total_positions - dated_price_count
+    latest_price_date = source_dates.max().date().isoformat() if not source_dates.empty else "Unavailable"
+
+    currencies = set(portfolio.get("currency", pd.Series(dtype=str)).fillna("").astype(str).str.upper())
+    currencies.update(cash_currencies)
+    currencies.discard("")
+    missing_fx = []
+    reference_fx = []
+    for currency in sorted(currencies - {base_ccy.upper()}):
+        info = current_fx_info(currency)
+        rate = pd.to_numeric(pd.Series([info.get("rate")]), errors="coerce").iloc[0]
+        if pd.isna(rate) or not np.isfinite(float(rate)) or float(rate) <= 0:
+            missing_fx.append(currency)
+        elif info.get("kind") == "reference":
+            reference_fx.append(currency)
+    unidentified_currency = bool(portfolio.get("currency", pd.Series(dtype=str)).fillna("").astype(str).str.strip().eq("").any())
+    if unidentified_currency:
+        missing_fx.append("Unknown currency")
+
+    with st.container(border=True):
+        st.markdown("**Data confidence & freshness**")
+        first_row, second_row = st.columns(2)
+        first_row.metric("Latest price update", latest_fetch)
+        first_row.caption(f"Latest provider price date: {latest_price_date}")
+        second_row.metric("Stale holding prices", f"{stale_count} / {total_positions}")
+        third_row, fourth_row = st.columns(2)
+        third_row.metric("Missing FX rates", f"{len(missing_fx)} missing" if missing_fx else "None")
+        if missing_fx:
+            third_row.caption("Affected currency: " + ", ".join(missing_fx))
+        fourth_row.metric("Priced and converted", f"{valued_count} / {total_positions}")
+
+        coverage = "Complete price/FX inputs" if valued_count == total_positions else "Partial price/FX inputs"
+        cost_coverage = f"Recorded cost basis: {cost_count} / {total_positions} holdings"
+        detail = (
+            f"{coverage}: {priced_count} / {total_positions} holdings have a quoted price and "
+            f"{valued_count} / {total_positions} have a usable price and FX conversion. "
+            f"Provider price dates are available for {dated_price_count} / {total_positions} holdings. "
+            "Portfolio values are calculated estimates from ledger units, market quotes and FX; "
+            "complete inputs do not make them broker statements. " + cost_coverage + "."
+        )
+        if stale_count:
+            detail += " Stale means the saved quote is over seven calendar days old or a refresh failed."
+        if reference_fx:
+            detail += " Daily reference FX is being used for: " + ", ".join(reference_fx) + "."
+        st.caption(detail)
+        if stale_count or valued_count < total_positions or missing_fx or undated_price_count:
+            warning = "Some displayed figures have stale, missing or undated inputs; treat affected totals and percentages as partial estimates."
+            if undated_price_count:
+                warning += f" Freshness cannot be verified for {undated_price_count} holding(s) without a provider price date."
+            st.warning(warning)
+        else:
+            st.success("All holdings have dated, non-stale prices and usable FX conversions. Portfolio values are still calculated estimates.")
+
+        if benchmark is not None:
+            st.markdown("**Portfolio vs benchmark dates**")
+            comparison = benchmark.get("comparison")
+            portfolio_dates = benchmark.get("portfolio_dates", pd.DatetimeIndex([]))
+            benchmark_dates = benchmark.get("benchmark_dates", pd.DatetimeIndex([]))
+            if comparison is None or comparison.empty:
+                st.warning("Not comparable yet: no common complete daily dates are available.")
+            else:
+                same_dates = portfolio_dates.equals(benchmark_dates)
+                common_start = comparison.index.min().date().isoformat()
+                common_end = comparison.index.max().date().isoformat()
+                label = "Identical daily return dates" if same_dates else "Date sets differ"
+                st.caption(
+                    f"{label}. Returns are compared on the common, gap-free range "
+                    f"{common_start} to {common_end} ({len(comparison)} observations). "
+                    f"Portfolio source range: {benchmark.get('portfolio_range', 'unavailable')}; "
+                    f"benchmark source range: {benchmark.get('benchmark_range', 'unavailable')}."
+                )
+                if benchmark.get("missing_fx"):
+                    st.caption("Historical FX series missing for: " + ", ".join(benchmark["missing_fx"]) + ".")
+
 if page == "Overview":
     st.title("Portfolio overview")
     st.markdown('<div class="terminal-tag">TRANSACTION LEDGER · MULTI-CURRENCY VALUATION · RISK SNAPSHOT</div>', unsafe_allow_html=True)
@@ -1144,6 +1290,8 @@ if page == "Overview":
                 st.warning("One or more cash balances are negative. This commonly means buys/sells were recorded without matching cash-in/cash-out events, or the cash ledger is incomplete.")
         if analytics["missing_fx"]:
             st.warning(f"Could not resolve historical FX for {len(analytics['missing_fx'])} transaction(s). Cost basis and cumulative metrics may be incomplete. Check Methodology & data.")
+    if active_tickers:
+        render_data_confidence_panel()
 
 
 elif page == "Investments":
@@ -1433,6 +1581,8 @@ elif page == "Investments":
                     except ValueError as exc: st.error(str(exc))
 
     st.caption("Investments is your portfolio home. Changes to opening-only positions update the snapshot; buys and sales are recorded as transactions. Prices and FX may be delayed or unavailable, and no trades are executed by this app.")
+    if active_tickers:
+        render_data_confidence_panel()
 
 elif page == "Transactions":
     st.title("Transaction ledger")
@@ -1560,6 +1710,32 @@ elif page == "Performance":
                     performance = pd.DataFrame()
                 benchmark_prices = converted_prices[benchmark_symbol] if benchmark_symbol in converted_prices.columns else pd.Series(dtype=float)
                 comparison = compare_to_benchmark(performance, benchmark_prices)
+            portfolio_dates = pd.DatetimeIndex([])
+            if not performance.empty and "daily_return" in performance:
+                portfolio_dates = pd.DatetimeIndex(performance.index[pd.to_numeric(performance["daily_return"], errors="coerce").notna()])
+                portfolio_dates = portfolio_dates.tz_localize(None).normalize().drop_duplicates().sort_values()
+            benchmark_returns = pd.to_numeric(benchmark_prices, errors="coerce").dropna().sort_index().pct_change(fill_method=None).dropna()
+            benchmark_dates = pd.DatetimeIndex(benchmark_returns.index).tz_localize(None).normalize().drop_duplicates().sort_values()
+
+            def date_range_label(index):
+                if len(index) == 0:
+                    return "unavailable"
+                return f"{index.min().date().isoformat()} to {index.max().date().isoformat()}"
+
+            missing_historical_fx = [
+                currency for currency, series in fx_history_by_currency.items()
+                if series is None or series.empty or not pd.to_numeric(series, errors="coerce").notna().any()
+            ]
+            render_data_confidence_panel(
+                benchmark={
+                    "comparison": comparison,
+                    "portfolio_dates": portfolio_dates,
+                    "benchmark_dates": benchmark_dates,
+                    "portfolio_range": date_range_label(portfolio_dates),
+                    "benchmark_range": date_range_label(benchmark_dates),
+                    "missing_fx": missing_historical_fx,
+                },
+            )
             missing_currency_symbols = [symbol for symbol in symbols if not currency_by_ticker.get(symbol)]
             if local_history.empty:
                 st.error("No historical price series was returned. Check ticker symbols and the Market Data status below.")

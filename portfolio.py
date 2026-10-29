@@ -77,6 +77,11 @@ def _initialize_schema_tables() -> None:
             quote_count INTEGER NOT NULL DEFAULT 0,
             note TEXT NOT NULL DEFAULT ''
         )""")
+        con.execute("""CREATE TABLE IF NOT EXISTS app_preferences (
+            preference_key TEXT PRIMARY KEY,
+            preference_value TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
         con.execute("CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(trade_date, id)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_transactions_ticker ON transactions(ticker)")
         con.execute("""CREATE TABLE IF NOT EXISTS instruments (
@@ -144,6 +149,33 @@ def _initialize_schema_tables() -> None:
             status TEXT NOT NULL, refreshed_tickers INTEGER NOT NULL DEFAULT 0,
             history_rows INTEGER NOT NULL DEFAULT 0, detail TEXT NOT NULL DEFAULT ''
         )""")
+
+
+def get_preferred_start_page() -> str | None:
+    """Return this account's saved first page, if one has been pinned."""
+    initialize_db()
+    with _connect() as con:
+        row = con.execute(
+            "SELECT preference_value FROM app_preferences WHERE preference_key=?",
+            ("preferred_start_page",),
+        ).fetchone()
+    return str(row["preference_value"] or "") if row else None
+
+
+def set_preferred_start_page(page: str | None) -> None:
+    """Save or clear this account's preferred first page."""
+    initialize_db()
+    with _connect() as con:
+        if page:
+            con.execute("""INSERT INTO app_preferences(preference_key,preference_value)
+                VALUES(?,?) ON CONFLICT(preference_key) DO UPDATE SET
+                preference_value=excluded.preference_value,updated_at=CURRENT_TIMESTAMP""",
+                ("preferred_start_page", str(page)))
+        else:
+            con.execute(
+                "DELETE FROM app_preferences WHERE preference_key=?",
+                ("preferred_start_page",),
+            )
 
 def _migrate_legacy_holdings_once() -> None:
     """Preserve the old CSV holdings if the new transaction ledger is empty."""
