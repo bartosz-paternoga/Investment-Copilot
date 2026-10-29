@@ -527,6 +527,19 @@ div[data-testid="stDataFrame"] { border:1px solid var(--adatch-line); border-rad
 [data-testid="stAlert"] { border-radius:12px; }
 [data-testid="stCaptionContainer"] { color:#8591a0; }
 hr { border-color:var(--adatch-line); }
+/* Keep AI Analyst typography and controls consistent without changing other pages. */
+[data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) h1 { font-size:2rem !important; line-height:1.2 !important; }
+[data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) h2,
+[data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) h3 { font-size:1.15rem !important; line-height:1.3 !important; }
+[data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) p,
+[data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) li { font-size:.9rem; line-height:1.5; }
+.st-key-ai_portfolio_briefing_card .stButton > button,
+.st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button {
+  box-sizing:border-box !important; width:136px !important; min-width:136px !important;
+  height:40px !important; min-height:40px !important; max-height:40px !important;
+  padding:0 12px !important; border-radius:8px !important;
+  font-family:inherit !important; font-size:14px !important; font-weight:650 !important; line-height:1.1 !important;
+}
 @media (max-width: 850px) {
   [data-testid="stMainBlockContainer"] { padding-left:.75rem; padding-right:.75rem; }
   .portfolio-hero { align-items:flex-start; flex-direction:column; gap:12px; }
@@ -537,8 +550,12 @@ hr { border-color:var(--adatch-line); }
   .st-key-ai_portfolio_briefing_card [data-testid="stVerticalBlockBorderWrapper"],
   .st-key-ai_portfolio_question_card [data-testid="stVerticalBlockBorderWrapper"] { padding:.65rem !important; }
   .st-key-ai_portfolio_intro h1 { font-size:26px !important; line-height:1.15 !important; letter-spacing:-.03em !important; margin-bottom:.35rem !important; }
+  [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) h1 { font-size:26px !important; line-height:1.2 !important; letter-spacing:-.03em !important; }
+  [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) h2,
+  [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) h3 { font-size:16px !important; line-height:1.3 !important; letter-spacing:-.015em !important; }
+  [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) p,
+  [data-testid="stMainBlockContainer"]:has(.st-key-ai_portfolio_intro) li { font-size:13px !important; line-height:1.45 !important; }
   .st-key-ai_portfolio_intro [data-testid="stCaptionContainer"] { font-size:13px !important; line-height:1.45 !important; }
-  .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:16px !important; line-height:1.3 !important; letter-spacing:-.015em !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:13px !important; line-height:1.45 !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:12px !important; line-height:1.4 !important; }
   .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:12px !important; }
