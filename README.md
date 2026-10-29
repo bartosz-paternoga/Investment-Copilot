@@ -1,5 +1,7 @@
 # Investment Copilot
 
+Copyright © 2026 Bartosz Paternoga. All rights reserved. No general license is granted to use, modify, or distribute this software.
+
 **An AI-assisted portfolio analyst and ETF research workspace.** Build dated, evidence-based portfolio briefings, ask questions about your holdings, and explore sourced ETF look-through exposures, concentration risks and market stress scenarios. Portfolio figures and scenario calculations are computed by the app; optional AI commentary is grounded in the supplied facts and source references.
 
 Built with Python, Streamlit, Pandas and Plotly. Investment Copilot supports local SQLite development and hosted PostgreSQL deployments with administrator-provisioned accounts and per-user data schemas. It also includes holdings, portfolio snapshots, benchmark comparisons, risk analytics and ETF research.
