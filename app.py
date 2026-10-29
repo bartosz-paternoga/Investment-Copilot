@@ -55,6 +55,57 @@ def _cached_issuer_holdings(fund_ticker: str, isin: str = "") -> dict:
     return fetch_issuer_holdings(fund_ticker, isin)
 
 
+@st.cache_resource
+def _ledger_fx_executor():
+    """Keep historical ledger FX lookups off the page-rendering thread."""
+    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="ledger-fx-refresh")
+
+
+def _refresh_ledger_fx_history(transactions: pd.DataFrame, base_currency: str) -> dict[str, int]:
+    """Batch-refresh missing transaction FX ranges after the workspace is visible."""
+    if transactions is None or transactions.empty:
+        return {}
+    dates = pd.to_datetime(transactions.get("trade_date", pd.Series(dtype=str)), errors="coerce").dropna()
+    if dates.empty:
+        return {}
+    start_date = dates.min().date().isoformat()
+    end_date = dates.max().date().isoformat()
+    currencies = sorted(
+        set(transactions.get("currency", pd.Series([base_currency]))
+            .fillna(base_currency).astype(str).str.upper()) - {str(base_currency).upper()}
+    )
+    return {
+        currency: len(get_fx_history(currency, base_currency, start_date, end_date))
+        for currency in currencies
+    }
+
+
+@st.fragment(run_every=1.0)
+def _poll_ledger_fx_refresh():
+    future = st.session_state.get("_ledger_fx_refresh_future")
+    if future is None:
+        error = st.session_state.get("_ledger_fx_refresh_error")
+        if error:
+            st.warning(f"Historical transaction FX could not be refreshed: {error}")
+        return
+    if not future.done():
+        st.caption("Loading missing historical FX rates in the background. The portfolio remains available.")
+        return
+    try:
+        results = future.result()
+    except Exception as exc:
+        st.session_state["_ledger_fx_refresh_error"] = str(exc)[:250]
+        results = {}
+    st.session_state["_ledger_fx_refresh_future"] = None
+    if any(results.values()):
+        st.session_state.pop("_transaction_analytics_cache", None)
+        st.session_state.pop("_ledger_fx_refresh_error", None)
+        st.rerun()
+    if not st.session_state.get("_ledger_fx_refresh_error"):
+        st.session_state["_ledger_fx_refresh_error"] = "No daily rates were returned for the required transaction dates."
+    st.warning(f"Historical transaction FX could not be refreshed: {st.session_state['_ledger_fx_refresh_error']}")
+
+
 def _ensure_analyst_issuer_holdings(portfolio: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     """Load missing or week-old automatic holdings before building an AI briefing."""
     if portfolio is None or portfolio.empty or "market_value_base" not in portfolio:
@@ -424,6 +475,7 @@ def _clear_auth_transition_overlay() -> None:
 def _show_auth_transition_overlay(message="Opening your portfolio…") -> None:
     global _auth_transition_overlay_visible
     _auth_transition_overlay_visible = True
+    st.session_state["_auth_transition_loading"] = True
     # Use a native Streamlit element here. A fixed, full-screen HTML overlay
     # can hide the whole page if its markup is delayed or fails to hydrate in
     # the browser during a cold start; this status remains visible and does
@@ -580,6 +632,7 @@ st.sidebar.caption(f"Version {APP_VERSION}")
 page = st.sidebar.radio("Workspace", PAGES, index=0, label_visibility="collapsed", key="workspace_page")
 base_ccy = st.sidebar.selectbox("Reporting currency", ["PLN", "EUR", "USD", "GBP"], index=0)
 transactions = list_transactions()
+user_key = str(_current_user["user_id"]) if _current_user is not None else "local"
 # Transaction analytics can involve historical FX lookups. Cache it within this
 # user's Streamlit session and invalidate it whenever the ledger or currency changes.
 # The user ID in the key prevents reuse across accounts in the same browser session.
@@ -598,11 +651,31 @@ if _cached_analytics is not None and _cached_analytics[0] == analytics_cache_key
 else:
     analytics = transaction_types_summary(transactions, base_ccy)
     st.session_state["_transaction_analytics_cache"] = (analytics_cache_key, analytics)
+
+# Warm missing historical transaction FX in a worker. The analytics above use
+# cached data only, so a slow Frankfurter response cannot keep the whole page
+# blank during sign-in.
+ledger_fx_refresh_key = (user_key, base_ccy, ledger_fingerprint)
+if st.session_state.get("_ledger_fx_refresh_attempt_key") != ledger_fx_refresh_key:
+    st.session_state.pop("_ledger_fx_refresh_error", None)
+if analytics.get("missing_fx") and st.session_state.get("_ledger_fx_refresh_attempt_key") != ledger_fx_refresh_key:
+    currencies_to_refresh = sorted(
+        set(transactions.get("currency", pd.Series([base_ccy]))
+            .fillna(base_ccy).astype(str).str.upper()) - {base_ccy}
+    )
+    st.session_state["_ledger_fx_refresh_attempt_key"] = ledger_fx_refresh_key
+    if currencies_to_refresh:
+        refresh_context = copy_context()
+        st.session_state["_ledger_fx_refresh_future"] = _ledger_fx_executor().submit(
+            refresh_context.run,
+            _refresh_ledger_fx_history,
+            transactions.copy(deep=True),
+            base_ccy,
+        )
 active_tickers = sorted([t for t, p in analytics["positions"].items() if p["quantity"] > 1e-10])
 watchlist_tickers = list_watchlist().get("ticker", pd.Series(dtype=str)).astype(str).tolist()
 primary_quote_tickers = sorted(set(active_tickers + watchlist_tickers))
 cash_currencies = sorted({str(currency).upper() for currency in analytics.get("cash", {}) if str(currency).strip()})
-user_key = str(_current_user["user_id"]) if _current_user is not None else "local"
 quote_bundle_key = (user_key, base_ccy, tuple(primary_quote_tickers), tuple(cash_currencies))
 
 
@@ -743,6 +816,8 @@ if refresh_on_login or st.session_state.quotes is None or st.session_state.quote
 
 if st.session_state.get("_login_market_refresh_future") is not None:
     _poll_login_market_refresh()
+if st.session_state.get("_ledger_fx_refresh_future") is not None or st.session_state.get("_ledger_fx_refresh_error"):
+    _poll_ledger_fx_refresh()
 
 quotes = st.session_state.quotes if isinstance(st.session_state.quotes, pd.DataFrame) else pd.DataFrame()
 try:
@@ -796,7 +871,9 @@ def current_fx_info(currency: str) -> dict:
     spot = fx_spot_rate_info(currency, base_ccy, quotes)
     if spot is not None:
         return spot
-    reference = fx_rate_info(currency, base_ccy) or {}
+    # A page render must never wait on the reference-rate provider. Missing
+    # rates are warmed by the background refresh and will appear on its rerun.
+    reference = fx_rate_info(currency, base_ccy, cached_only=True) or {}
     if reference:
         reference["kind"] = "reference"
     return reference
@@ -815,7 +892,13 @@ def fx_timing_label(info: dict) -> str:
 
 
 quotes = add_quote_timing_columns(quotes)
-portfolio = build_portfolio(transactions, quotes, base_ccy, analytics=analytics)
+portfolio = build_portfolio(
+    transactions,
+    quotes,
+    base_ccy,
+    analytics=analytics,
+    cached_fx_only=True,
+)
 fx_metadata = {}
 if not portfolio.empty:
     for currency in sorted(set(portfolio["currency"].fillna("").astype(str).str.upper())):
@@ -2650,7 +2733,10 @@ elif page == "Methodology & data":
     st.subheader("Database backup")
     st.write("The database defaults to `data/portfolio.sqlite3`. The online backup script `./scripts/backup_db.sh` uses SQLite's backup API, including when WAL is enabled. Keep backups outside version control and test restoring a copy. Export transactions to CSV from the Transactions page for a readable ledger copy.")
 
-# Keep the startup status visible until the selected page has finished rendering.
-# Clearing it after authentication/data loading but before page rendering left a
-# blank interval while the rest of a cold-start rerun was still working.
-_clear_auth_transition_overlay()
+# Replace the transition message in place after rendering instead of clearing
+# its root placeholder. This keeps Streamlit from dropping the first app frame
+# while it reconciles the post-login layout.
+if _auth_transition_overlay_visible:
+    _auth_transition_overlay.success("Portfolio ready", icon="✅")
+    _auth_transition_overlay_visible = False
+    st.session_state["_auth_transition_loading"] = False

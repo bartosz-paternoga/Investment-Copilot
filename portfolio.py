@@ -538,7 +538,12 @@ def transaction_types_summary(transactions: pd.DataFrame, base_currency: str = "
         for ccy in currencies:
             if ccy != str(base_currency).upper():
                 try:
-                    fx_histories[ccy] = get_fx_history(ccy, base_currency, first_tx_date, last_tx_date)
+                    # Portfolio rendering must not wait for network FX history.
+                    # The app warms missing ranges in the background after
+                    # showing the workspace; use persisted rates immediately.
+                    fx_histories[ccy] = get_fx_history(
+                        ccy, base_currency, first_tx_date, last_tx_date, cached_only=True
+                    )
                 except Exception:
                     fx_histories[ccy] = pd.Series(dtype=float)
 
@@ -559,7 +564,9 @@ def transaction_types_summary(transactions: pd.DataFrame, base_currency: str = "
             except (TypeError, ValueError, IndexError):
                 pass
         # Fallback for unsupported currencies or unusually long reference-rate gaps.
-        return fx_rate(ccy, base_currency, tx_date)
+        # A missing historical point must not trigger one HTTP request per
+        # transaction during startup. The range refresh is batched elsewhere.
+        return fx_rate(ccy, base_currency, tx_date, cached_only=True)
 
     for _, tx in transactions.sort_values(["trade_date", "id"]).iterrows():
         kind = str(tx["transaction_type"]).upper()
@@ -640,7 +647,14 @@ def position_quantities() -> dict[str, float]:
     return {t: p["quantity"] for t, p in positions.items()}
 
 
-def fx_rate(source: str, target: str, on_date: str | None = None, *, force_refresh: bool = False) -> float | None:
+def fx_rate(
+    source: str,
+    target: str,
+    on_date: str | None = None,
+    *,
+    force_refresh: bool = False,
+    cached_only: bool = False,
+) -> float | None:
     source = str(source or "").upper().strip()
     target = str(target or "").upper().strip()
     if not source or not target:
@@ -651,11 +665,12 @@ def fx_rate(source: str, target: str, on_date: str | None = None, *, force_refre
     key = (source, target, req_date)
     if key in FX_CACHE:
         age = time.time() - FX_CACHE_TIME.get(key, 0.0)
-        if not force_refresh and (req_date != "latest" or age < 1800):
+        if cached_only or (not force_refresh and (req_date != "latest" or age < 1800)):
             return FX_CACHE[key][0]
-        FX_CACHE.pop(key, None)
-        FX_CACHE_TIME.pop(key, None)
-        FX_CACHE_FETCHED_AT.pop(key, None)
+        if not cached_only:
+            FX_CACHE.pop(key, None)
+            FX_CACHE_TIME.pop(key, None)
+            FX_CACHE_FETCHED_AT.pop(key, None)
     try:
         cached = None
         if not force_refresh:
@@ -672,6 +687,8 @@ def fx_rate(source: str, target: str, on_date: str | None = None, *, force_refre
     except Exception:
         # Database tables may not yet exist when fx_rate is called independently.
         pass
+    if cached_only:
+        return None
     date_part = "latest" if req_date == "latest" else req_date
     try:
         response = requests.get(f"https://api.frankfurter.dev/v1/{date_part}", params={"base": source, "symbols": target}, timeout=12)
@@ -717,10 +734,16 @@ def _save_fx_rate(source: str, target: str, requested_date: str, rate: float, re
         pass
 
 
-def fx_returned_date(source: str, target: str, on_date: str | None = None) -> str | None:
+def fx_returned_date(
+    source: str,
+    target: str,
+    on_date: str | None = None,
+    *,
+    cached_only: bool = False,
+) -> str | None:
     if source == target:
         return on_date or date.today().isoformat()
-    fx_rate(source, target, on_date)
+    fx_rate(source, target, on_date, cached_only=cached_only)
     pair = (str(source).upper(), str(target).upper(), str(on_date)[:10] if on_date else "latest")
     cached = FX_CACHE.get(pair)
     if cached:
@@ -730,14 +753,19 @@ def fx_returned_date(source: str, target: str, on_date: str | None = None) -> st
 
 
 def fx_rate_info(
-    source: str, target: str, on_date: str | None = None, *, force_refresh: bool = False
+    source: str,
+    target: str,
+    on_date: str | None = None,
+    *,
+    force_refresh: bool = False,
+    cached_only: bool = False,
 ) -> dict[str, Any] | None:
     """Return an FX rate with its provider fixing date and cache/fetch timestamp."""
     source = str(source or "").upper().strip()
     target = str(target or "").upper().strip()
     if not source or not target:
         return None
-    rate = fx_rate(source, target, on_date, force_refresh=force_refresh)
+    rate = fx_rate(source, target, on_date, force_refresh=force_refresh, cached_only=cached_only)
     if rate is None:
         return None
     req_date = str(on_date)[:10] if on_date else "latest"
@@ -817,7 +845,13 @@ def fx_spot_rate_info(source: str, target: str, quotes: pd.DataFrame | None) -> 
 
 
 def get_fx_history(
-    source: str, target: str, start_date: str, end_date: str | None = None, *, force_refresh: bool = False
+    source: str,
+    target: str,
+    start_date: str,
+    end_date: str | None = None,
+    *,
+    force_refresh: bool = False,
+    cached_only: bool = False,
 ) -> pd.Series:
     """Return cached/downloaded daily reference FX rates for a currency pair.
 
@@ -848,7 +882,7 @@ def get_fx_history(
     # end. Historical points are retained and updated idempotently.
     cached_needs_refresh = (not cached) or (pd.Timestamp(end) - pd.Timestamp(max(cached))).days > 5
     cached_needs_start = bool(cached) and pd.Timestamp(min(cached)) > pd.Timestamp(start) + pd.Timedelta(days=5)
-    if force_refresh or cached_needs_refresh or cached_needs_start:
+    if not cached_only and (force_refresh or cached_needs_refresh or cached_needs_start):
         fetched: dict[str, float] = {}
         for base, quote, invert in ((source, target, False), (target, source, True)):
             try:
@@ -1031,6 +1065,7 @@ def build_portfolio(
     base_ccy: str = "PLN",
     *,
     analytics: dict[str, Any] | None = None,
+    cached_fx_only: bool = False,
 ) -> pd.DataFrame:
     if transactions.empty:
         return pd.DataFrame()
@@ -1064,10 +1099,12 @@ def build_portfolio(
         if spot_info is not None:
             fx_info_by_currency[currency] = spot_info
         else:
-            reference_rate = fx_rate(currency, base_ccy)
+            reference_rate = fx_rate(currency, base_ccy, cached_only=cached_fx_only)
             fx_info_by_currency[currency] = {
                 "rate": reference_rate, "previous_rate": reference_rate,
-                "returned_date": fx_returned_date(currency, base_ccy), "fetched_at": None,
+                "returned_date": fx_returned_date(currency, base_ccy, cached_only=cached_fx_only)
+                if reference_rate is not None else None,
+                "fetched_at": None,
                 "ticker": "", "kind": "reference",
             }
     out["fx_to_base"] = out["currency"].map(lambda c: fx_info_by_currency.get(str(c).upper(), {}).get("rate"))
