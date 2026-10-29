@@ -38,6 +38,7 @@ from performance_engine import (
 from research_analytics import calculate_etf_overlap, calculate_portfolio_xray, holdings_weight_coverage
 from etf_holdings_sources import fetch_issuer_holdings
 from analyst_evidence import build_analyst_evidence
+from speech_to_text import portfolio_question_input_component
 
 TABLE_AMOUNT_WIDTH = None
 TABLE_PERCENT_WIDTH = None
@@ -2153,6 +2154,28 @@ elif page == "AI Analyst":
 
     with st.container(border=True):
         st.subheader("Ask a question about your portfolio")
+        dictation_result = portfolio_question_input_component(
+            key="ai_portfolio_question_dictation",
+            on_transcript_event_change=lambda: None,
+            on_reset_event_change=lambda: None,
+        )
+        transcript_event = getattr(dictation_result, "transcript_event", None)
+        reset_event = getattr(dictation_result, "reset_event", None)
+        reset_id = str(reset_event.get("id", "")) if isinstance(reset_event, dict) else ""
+        if reset_id and reset_id != st.session_state.get("_ai_question_last_reset_event"):
+            st.session_state["ai_portfolio_question"] = ""
+            st.session_state["_ai_question_last_reset_event"] = reset_id
+            if isinstance(transcript_event, dict) and transcript_event.get("id"):
+                st.session_state["_ai_question_last_dictation_event"] = str(transcript_event["id"])
+        elif isinstance(transcript_event, dict):
+            event_id = str(transcript_event.get("id", ""))
+            transcript_text = str(transcript_event.get("text", "")).strip()
+            if event_id and transcript_text and event_id != st.session_state.get("_ai_question_last_dictation_event"):
+                existing_question = str(st.session_state.get("ai_portfolio_question", "") or "").strip()
+                separator = " " if existing_question and existing_question[-1] not in " \n\t" else ""
+                st.session_state["ai_portfolio_question"] = f"{existing_question}{separator}{transcript_text}".strip()
+                st.session_state["_ai_question_last_dictation_event"] = event_id
+
         with st.form("ai_portfolio_question_form"):
             portfolio_question = st.text_area(
                 "Your question",
@@ -2160,7 +2183,10 @@ elif page == "AI Analyst":
                 height=100,
                 key="ai_portfolio_question",
             )
-            ask_question_clicked = st.form_submit_button("Ask AI", type="secondary")
+            ask_question_clicked = st.form_submit_button("Ask AI", type="primary")
+        st.caption(
+            "Dictation does not use OpenRouter. Your browser sends audio to its own online speech service. Language defaults to your browser setting; change it if needed. **Reset dictation** stops listening and clears the whole question box."
+        )
 
     def run_ai_request(request_question: str, payload: dict, mode: str) -> tuple[str, str, float]:
         evidence_text = json.dumps(payload, ensure_ascii=False, default=str)
@@ -2243,7 +2269,7 @@ Return ONLY the JSON object required by the response schema. Put each useful con
         question = str(portfolio_question or "").strip()
         if not question:
             st.session_state["_ai_portfolio_answer"] = {
-                "question": "", "answer": "", "error": "Type a question first, then press Ask AI."
+                "question": "", "answer": "", "error": "Type or dictate a question first, then press Ask AI."
             }
         elif not api_key:
             st.session_state["_ai_portfolio_answer"] = {
