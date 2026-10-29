@@ -247,9 +247,11 @@ def _set_auth_cookie(
                 document.cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
                     `Path=/; Expires=${{expires}}; Secure; SameSite=Lax`;
             }} else {{
-                // Do not store an auth token in the browser when remember-me
-                // is off. This also removes a persistent cookie from an older login.
+                // Remove any old remembered cookie, then keep this token only
+                // for the browser session so a page refresh can restore login.
                 document.cookie = `${{encodeURIComponent(name)}}=; Path=/; Max-Age=0; Secure; SameSite=Lax`;
+                document.cookie = `${{encodeURIComponent(name)}}=${{encodeURIComponent(value)}}; ` +
+                    `Path=/; Secure; SameSite=Lax`;
             }}
         }} catch (error) {{}}
         </script>""",
@@ -438,7 +440,7 @@ def render_auth_gate(st) -> dict[str, Any] | None:
                 "Stay signed in on this device (30 days)",
                 value=False,
                 key="login_stay_signed_in",
-                help="When unchecked, the app does not save a sign-in cookie; a new app session requires signing in again. When checked, the sign-in persists on this device for up to 30 days.",
+                help="When unchecked, sign-in lasts for this browser session (up to 12 hours) and survives page refreshes. When checked, it persists on this device for up to 30 days.",
             )
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         st.caption("Accounts are created by an administrator. Self-registration is disabled.")
