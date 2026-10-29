@@ -1392,11 +1392,35 @@ elif page == "Investments":
             if days:
                 cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
                 snap_view = snap_view[snap_view["as_of"] >= cutoff]
+            snap_view["as_of"] = snap_view["as_of"].dt.tz_convert(display_timezone)
+            snap_view["market_value"] = pd.to_numeric(snap_view["market_value"], errors="coerce")
+            snap_view = snap_view.dropna(subset=["market_value"])
+            snap_view = snap_view[np.isfinite(snap_view["market_value"])].sort_values("as_of")
             if len(snap_view) >= 2:
+                value_low = float(snap_view["market_value"].min())
+                value_high = float(snap_view["market_value"].max())
+                value_padding = max((value_high - value_low) * 0.15, max(abs(value_high), abs(value_low)) * 0.003, 1.0)
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=snap_view["as_of"], y=snap_view["market_value"], mode="lines", line=dict(color="#64748b", width=2.6), fill="tozeroy", fillcolor="rgba(100,116,139,0.11)", name="Portfolio value", hovertemplate="%{x|%d %b %Y}<br>%{y:,.2f} " + base_ccy + "<extra></extra>"))
-                fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(t=10,b=10,l=0,r=0), height=300, showlegend=False, xaxis=dict(showgrid=False, title=None), yaxis=dict(gridcolor="rgba(140,160,180,.12)", title=None, tickformat=",.0f"), hovermode="x unified")
+                fig.add_trace(go.Scatter(
+                    x=snap_view["as_of"], y=snap_view["market_value"], mode="lines+markers",
+                    line=dict(color="#64748b", width=2.6), marker=dict(size=6),
+                    name="Portfolio value",
+                    hovertemplate="%{x|%d %b %Y %H:%M}<br>%{y:,.2f} " + base_ccy + "<extra></extra>",
+                ))
+                fig.update_layout(
+                    template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(t=10,b=10,l=0,r=0), height=300, showlegend=False,
+                    xaxis=dict(showgrid=False, title=None, tickformat="%d %b"),
+                    yaxis=dict(gridcolor="rgba(140,160,180,.12)", title=f"Market value ({base_ccy})",
+                               tickformat=",.0f", range=[value_low - value_padding, value_high + value_padding],
+                               autorange=False, zeroline=False),
+                    hovermode="x unified",
+                )
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar":False})
+                st.caption(
+                    f"{len(snap_view)} saved valuation snapshots · {snap_view['as_of'].iloc[0].strftime('%d %b %Y')} to {snap_view['as_of'].iloc[-1].strftime('%d %b %Y')}. "
+                    "The vertical axis is zoomed to show changes; values include deposits and withdrawals and are not investment returns."
+                )
             else:
                 st.info("Not enough valuation snapshots for this period yet. Use Refresh market data to record a snapshot.")
         elif not portfolio.empty:
