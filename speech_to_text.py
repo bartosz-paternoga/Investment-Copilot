@@ -44,16 +44,16 @@ _CSS = """
 .controls button:disabled { cursor:not-allowed; opacity:.5; }
 #dictation-status { flex:1 1 100%; min-width:0; margin:0; color:#758195; font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
 @media (max-width:600px) {
-  .dictation { font-size:11px; }
-  .controls { gap:6px; }
-  .language-control { flex:0 0 auto; }
-  .language-control select { flex-basis:125px; width:125px; max-width:125px; min-height:28px; padding:3px 6px; font-size:12px; }
-  .actions { flex:1 1 100%; gap:5px; }
-  .secondary-actions { gap:5px; }
-  .controls button { min-height:28px; padding:4px 7px; font-size:11px; }
-  #dictation-start { flex:0 0 auto; }
-  #dictation-stop { padding-left:8px; padding-right:8px; }
-  #dictation-status { font-size:10px; }
+  .dictation { font-size:10px !important; }
+  .controls { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; }
+  .language-control { gap:6px; }
+  .language-control label { font-size:10px !important; }
+  .language-control select { flex:0 0 118px; width:118px; max-width:118px; min-height:27px; padding:3px 6px; font-size:11px !important; }
+  .actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; width:100%; }
+  .secondary-actions { display:contents; }
+  .controls button { width:100% !important; min-width:0; min-height:28px; padding:3px 4px; border-radius:6px; font-size:10px !important; line-height:1.1; }
+  #dictation-start { flex:none; }
+  #dictation-status { font-size:9px !important; line-height:1.3; }
 }
 """
 
@@ -256,4 +256,4 @@ def _portfolio_question_dictation_component(version: int):
 
 def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
-    return _portfolio_question_dictation_component(4)(**kwargs)
+    return _portfolio_question_dictation_component(5)(**kwargs)

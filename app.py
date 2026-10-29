@@ -541,14 +541,15 @@ hr { border-color:var(--adatch-line); }
   .st-key-ai_portfolio_briefing_card, .st-key-ai_portfolio_question_card { gap:.45rem !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stVerticalBlockBorderWrapper"],
   .st-key-ai_portfolio_question_card [data-testid="stVerticalBlockBorderWrapper"] { padding:.65rem !important; }
-  .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:15px !important; line-height:1.25 !important; letter-spacing:-.01em !important; }
+  .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:14px !important; line-height:1.25 !important; letter-spacing:-.01em !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:12px !important; line-height:1.4 !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:11px !important; line-height:1.35 !important; }
-  .st-key-ai_portfolio_briefing_card .stButton > button { width:max-content !important; min-height:32px !important; padding:.35rem .7rem !important; font-size:12px !important; }
+  .st-key-ai_portfolio_briefing_card .stButton > button { width:max-content !important; min-height:30px !important; padding:.3rem .65rem !important; border-radius:7px !important; font-size:11px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:12px !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { min-height:72px !important; padding:8px 9px !important; font-size:13px !important; line-height:1.4 !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { min-height:30px !important; padding:.32rem .7rem !important; font-size:12px !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:10px !important; line-height:1.35 !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { height:72px !important; min-height:72px !important; padding:7px 8px !important; font-size:12px !important; line-height:1.35 !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stForm"] { border:0 !important; padding:0 !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { min-height:28px !important; padding:.28rem .65rem !important; border-radius:7px !important; font-size:11px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:9px !important; line-height:1.3 !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2190,16 +2191,16 @@ elif page == "AI Analyst":
                 st.session_state["ai_portfolio_question"] = f"{existing_question}{separator}{transcript_text}".strip()
                 st.session_state["_ai_question_last_dictation_event"] = event_id
 
-        with st.form("ai_portfolio_question_form"):
+        with st.form("ai_portfolio_question_form", border=False):
             portfolio_question = st.text_area(
                 "Your question",
                 placeholder="For example: Which of my ETFs overlap most, and what evidence supports that?",
-                height=100,
+                height=72,
                 key="ai_portfolio_question",
             )
             ask_question_clicked = st.form_submit_button("Ask AI", type="primary", width="content")
         st.caption(
-            "Audio goes to your browser's online speech service, not OpenRouter. Reset clears the whole question."
+            "Speech stays with your browser's dictation service. Reset clears the question."
         )
 
     def run_ai_request(request_question: str, payload: dict, mode: str) -> tuple[str, str, float]:
