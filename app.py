@@ -1983,8 +1983,9 @@ elif page == "Watchlist":
             "order":"Order", "ticker":"Symbol", "name":"Name", "currency":"Currency", "price":"Price", "day_change_pct":"Price change %",
             "price_timing":"Price date / time", "status":"Status", "note":"Note",
         })
-        european_dataframe(watch_table, use_container_width=True, hide_index=True, row_height=34, column_config={
-            "Order":st.column_config.NumberColumn(format="%.0f", width="small"),
+        watch_table_height = 72 + 34 * min(len(watch_table), 12)
+        european_dataframe(watch_table, use_container_width=True, hide_index=True, height=watch_table_height, row_height=34, column_config={
+            "Order":st.column_config.NumberColumn(format="%.0f", width=58),
             "Symbol":st.column_config.TextColumn(width="small"),
             "Name":st.column_config.TextColumn(width=150),
             "Currency":st.column_config.TextColumn(width="small"),
@@ -2005,7 +2006,7 @@ elif page == "Watchlist":
                 order_editor_data, use_container_width=False, hide_index=True, key=f"watchlist_order_editor_{order_key}",
                 column_config={
                     "Symbol":st.column_config.TextColumn(disabled=True, width=110),
-                    "Order":st.column_config.NumberColumn(min_value=1, step=1, format="%d", width="small"),
+                    "Order":st.column_config.NumberColumn(min_value=1, step=1, format="%d", width=58),
                 },
                 disabled=["Symbol"],
             )
