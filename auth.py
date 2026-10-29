@@ -353,44 +353,15 @@ def set_user_active(user_id: str, active: bool, *, actor_user_id: str) -> None:
 def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     """Render login/reset screen and return a freshly validated active user."""
     auth_screen = st.empty()
-    if not st.session_state.get("_bootstrap_checked", False) and show_transition is not None:
-        show_transition("Checking your sign-in information…")
-    # Bootstrap/schema setup is needed once per Streamlit browser session, not
-    # on every page rerun. Keep retrying only if configuration is still invalid.
-    if not st.session_state.get("_bootstrap_checked", False):
-        message = ensure_bootstrap_admin()
-        if message:
-            st.info(message)
-            if message.startswith("Created bootstrap administrator"):
-                st.session_state["_bootstrap_checked"] = True
-        else:
-            st.session_state["_bootstrap_checked"] = True
-    # Prefer the token already validated in this Streamlit session. On a
-    # browser refresh, restore it from the cookie sent with the new request.
-    cookie_probe_pending = st.session_state.pop("_auth_cookie_probe_pending", False)
+    # Read cookies opportunistically, but never gate the login form on the
+    # browser component returning. Streamlit Cloud can delay that response;
+    # the form must remain usable while it is in flight.
     skip_cookie_once = st.session_state.pop("_auth_skip_cookie_once", False)
     session_token = st.session_state.get("auth_session_token")
-    cookie_probe_complete = st.session_state.get("_auth_cookie_probe_complete", False)
-    if not session_token and not skip_cookie_once and not cookie_probe_complete:
-        session_token = _request_session_cookie(
-            st, browser_result_only=cookie_probe_pending
-        )
-        if not session_token and not cookie_probe_pending:
-            # Keep the login form covered while the browser component returns.
-            # The app-side timeout reveals it if the component never responds.
-            st.session_state["_auth_cookie_probe_pending"] = True
-            st.session_state["_auth_cookie_probe_deadline"] = time.monotonic() + 1.5
-            if show_transition is not None:
-                show_transition("Investment Copilot")
-            return None
-        elif not session_token and cookie_probe_pending:
-            # The component response arrived without a saved token. Stop probing
-            # so the login form stays stable while credentials are entered.
-            st.session_state["_auth_cookie_probe_complete"] = True
-        elif session_token and cookie_probe_pending and show_transition is not None:
-            # A saved cookie arrived on the follow-up component rerun. Keep the
-            # login form covered while validating it and opening the workspace.
-            show_transition("Investment Copilot")
+    if not session_token and not skip_cookie_once:
+        session_token = _request_session_cookie(st)
+        if session_token and show_transition is not None:
+            show_transition("Opening your portfolio…")
 
     # CookieManager reports its browser-side set result by triggering one more
     # Streamlit run. Reuse the account already verified by password auth during
@@ -412,10 +383,8 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
         st.session_state.pop("_auth_login_transition", None)
     current = transition_user or (load_auth_session(session_token) if session_token else None)
     if session_token and not current:
-        # A stale cookie is still a completed probe. Do not mount the reader
-        # again beside the login form, where its response can interrupt submit.
-        st.session_state["_auth_cookie_probe_complete"] = True
-        st.session_state.pop("_auth_cookie_probe_pending", None)
+        st.session_state.pop("auth_session_token", None)
+        st.session_state.pop("auth_user_id", None)
     if current and session_token:
         st.session_state["auth_session_token"] = session_token
         st.session_state["auth_user_id"] = current["user_id"]
@@ -456,43 +425,6 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
     with auth_screen.container():
         st.title("Investment Copilot")
         st.caption("Private investment workspace · administrator-provisioned accounts")
-        st.markdown(
-            """
-            <style>
-            #auth-submit-overlay {
-                display: none;
-                position: fixed;
-                inset: 0;
-                z-index: 2147483646;
-                place-content: center;
-                justify-items: center;
-                gap: 14px;
-                background: #f4f6f8;
-                color: #475569;
-                font: 600 16px/1.4 sans-serif;
-            }
-            body:has(.st-key-login_form button:disabled) #auth-submit-overlay {
-                display: grid;
-            }
-            #auth-submit-spinner {
-                width: 34px;
-                height: 34px;
-                border: 3px solid #d9e2eb;
-                border-top-color: #64748b;
-                border-radius: 50%;
-                animation: auth-submit-spin .8s linear infinite;
-            }
-            @keyframes auth-submit-spin {
-                to { transform: rotate(360deg); }
-            }
-            </style>
-            <div id="auth-submit-overlay" role="status" aria-live="polite">
-                <div id="auth-submit-spinner"></div>
-                <div>Signing in and opening your portfolio…</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         with st.form("login_form"):
             username = st.text_input("Username", autocomplete="username")
             password = st.text_input("Password", type="password", autocomplete="current-password")
@@ -509,6 +441,16 @@ def render_auth_gate(st, show_transition=None) -> dict[str, Any] | None:
         st.session_state["_auth_transition_loading"] = True
         if show_transition is not None:
             show_transition()
+        # Set up the bootstrap account only when someone actually submits the
+        # form. Database DDL during an ordinary page open delayed the login
+        # screen and made cookie-check failures look like a blank page.
+        if not st.session_state.get("_bootstrap_checked", False):
+            bootstrap_message = ensure_bootstrap_admin()
+            if bootstrap_message and not bootstrap_message.startswith("Created bootstrap administrator"):
+                st.session_state["_auth_transition_loading"] = False
+                st.error(bootstrap_message)
+                return None
+            st.session_state["_bootstrap_checked"] = True
         user = authenticate(username, password)
         if user:
             LOGGER.info("Password check accepted; creating an app session.")
