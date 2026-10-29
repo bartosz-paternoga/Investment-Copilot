@@ -250,18 +250,16 @@ def _openrouter_chat(
             "model": model,
             "messages": messages,
             "temperature": 0.1,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
         }
         if response_format:
             # Require an endpoint that honors the evidence-linked response
             # schema; the app cannot safely trust free-form uncited prose.
             request_body["response_format"] = response_format
             request_body["provider"] = {"require_parameters": True}
-        # openrouter/free can select a reasoning model, and reasoning tokens
-        # count against max_tokens even when excluded from the returned text.
-        # Disable reasoning so the output budget is available for the cited answer.
-        if model == "openrouter/free":
-            request_body["reasoning"] = {"effort": "none", "exclude": True}
+        # openrouter/free selects a provider dynamically. Some selected endpoints
+        # require reasoning and reject effort="none", so let the provider use its
+        # default reasoning mode and reserve enough completion budget for the answer.
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
@@ -270,11 +268,8 @@ def _openrouter_chat(
                 "HTTP-Referer": "https://investmentcopilot.streamlit.app",
                 "X-Title": "Investment Copilot",
             },
-            # Reasoning and visible text share this limit on many providers. A
-            # 1,200-token cap was exhausted by Recursive/Flint's reasoning
-            # before it returned any commentary. Keep the answer concise in
-            # the prompt, but leave enough completion budget for reasoning
-            # plus the actual cited text.
+            # Reasoning and visible text share this limit on many providers. Keep
+            # the answer concise, while allowing mandatory reasoning to finish.
             json=request_body,
             timeout=(10, 30),
         )
@@ -544,11 +539,11 @@ hr { border-color:var(--adatch-line); }
   .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:14px !important; line-height:1.25 !important; letter-spacing:-.01em !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:12px !important; line-height:1.4 !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:10px !important; line-height:1.3 !important; }
-  .st-key-ai_portfolio_briefing_card .stButton > button { width:110px !important; min-height:28px !important; padding:.25rem .5rem !important; border-radius:6px !important; font-size:10px !important; }
+  .st-key-ai_portfolio_briefing_card .stButton > button { width:86px !important; min-height:24px !important; padding:.15rem .35rem !important; border-radius:6px !important; font-size:9px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:11px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { height:72px !important; min-height:72px !important; padding:7px 8px !important; font-size:12px !important; line-height:1.35 !important; }
   .st-key-ai_portfolio_question_card [data-testid="stForm"] { border:0 !important; padding:0 !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { width:110px !important; min-height:28px !important; padding:.25rem .5rem !important; border-radius:6px !important; font-size:10px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { width:86px !important; min-height:24px !important; padding:.15rem .35rem !important; border-radius:6px !important; font-size:9px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:9px !important; line-height:1.3 !important; }
 }
 </style>

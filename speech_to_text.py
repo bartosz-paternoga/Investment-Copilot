@@ -47,11 +47,11 @@ _CSS = """
   .dictation { font-size:10px !important; }
   .controls { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; }
   .language-control { gap:6px; }
-  .language-control label { font-size:10px !important; }
-  .language-control select { flex:0 0 118px; width:118px; max-width:118px; min-height:28px; padding:3px 6px; border-radius:6px; font-size:11px !important; }
-  .actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; width:100%; }
+  .language-control label { font-size:9px !important; }
+  .language-control select { flex:0 0 110px; width:110px; max-width:110px; min-height:24px; padding:2px 6px; border-radius:6px; font-size:10px !important; }
+  .actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; width:268px; max-width:100%; }
   .secondary-actions { display:contents; }
-  .controls button { width:100% !important; min-width:0; min-height:28px; padding:3px 4px; border-radius:6px; font-size:10px !important; line-height:1.1; }
+  .controls button { width:100% !important; min-width:0; min-height:24px; padding:2px 4px; border-radius:6px; font-size:9px !important; line-height:1.1; }
   #dictation-start { flex:none; }
   #dictation-status { font-size:9px !important; line-height:1.3; }
 }
@@ -256,4 +256,4 @@ def _portfolio_question_dictation_component(version: int):
 
 def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
-    return _portfolio_question_dictation_component(6)(**kwargs)
+    return _portfolio_question_dictation_component(7)(**kwargs)
