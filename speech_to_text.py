@@ -17,15 +17,15 @@ _HTML = """
       </select>
     </div>
     <div class="actions">
-      <button id="dictation-start" type="button">Start dictation</button>
+      <button id="dictation-start" type="button" title="Start voice dictation">Start</button>
       <div class="secondary-actions">
         <button id="dictation-stop" type="button" disabled>Stop</button>
-        <button id="dictation-reset" type="button">Reset dictation</button>
+        <button id="dictation-reset" type="button" title="Clear the question">Clear</button>
       </div>
     </div>
   </div>
   <div id="dictation-status" role="status" aria-live="polite">
-    Ready. Press Start dictation when you are ready.
+    Ready
   </div>
 </div>
 """
@@ -48,7 +48,7 @@ _CSS = """
   .controls { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; }
   .language-control { gap:6px; }
   .language-control label { font-size:10px !important; }
-  .language-control select { flex:0 0 118px; width:118px; max-width:118px; min-height:27px; padding:3px 6px; font-size:11px !important; }
+  .language-control select { flex:0 0 118px; width:118px; max-width:118px; min-height:28px; padding:3px 6px; border-radius:6px; font-size:11px !important; }
   .actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; width:100%; }
   .secondary-actions { display:contents; }
   .controls button { width:100% !important; min-width:0; min-height:28px; padding:3px 4px; border-radius:6px; font-size:10px !important; line-height:1.1; }
@@ -99,7 +99,7 @@ export default function(component) {
     startButton.disabled = true;
     setStatus("Dictation is unavailable in this browser. You can type your question or use your device's voice typing.");
   } else {
-    setStatus("Ready. Press Start dictation when you are ready.");
+    setStatus("Ready");
   }
 
   const flushTranscript = () => {
@@ -209,7 +209,7 @@ export default function(component) {
           controller.retryTimer = setTimeout(() => {
             if (!controller.wantsListening || controller.disposed || generation !== controller.generation) return;
             try { recognition.start(); }
-            catch (_) { setStatus("Browser dictation stopped. Press Start dictation to continue; completed phrases remain in the question box."); }
+            catch (_) { setStatus("Dictation stopped. Press Start to continue; your question stays in the box."); }
           }, 800);
         }
       }, 350);
@@ -256,4 +256,4 @@ def _portfolio_question_dictation_component(version: int):
 
 def portfolio_question_input_component(**kwargs):
     """Mount browser dictation controls and return their state."""
-    return _portfolio_question_dictation_component(5)(**kwargs)
+    return _portfolio_question_dictation_component(6)(**kwargs)

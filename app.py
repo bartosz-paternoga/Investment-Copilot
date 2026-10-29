@@ -533,22 +533,22 @@ div[data-testid="stDataFrame"] { border:1px solid var(--adatch-line); border-rad
 [data-testid="stCaptionContainer"] { color:#8591a0; }
 hr { border-color:var(--adatch-line); }
 @media (max-width: 850px) {
-  [data-testid="stMainBlockContainer"] { padding-left:1rem; padding-right:1rem; }
+  [data-testid="stMainBlockContainer"] { padding-left:.75rem; padding-right:.75rem; }
   .portfolio-hero { align-items:flex-start; flex-direction:column; gap:12px; }
   .portfolio-hero > div:first-child { flex-basis:auto; width:100%; }
   .portfolio-hero .hero-badge { white-space:normal; }
   .hero-badge { align-self:flex-start; }
-  .st-key-ai_portfolio_briefing_card, .st-key-ai_portfolio_question_card { gap:.45rem !important; }
+  .st-key-ai_portfolio_briefing_card, .st-key-ai_portfolio_question_card { gap:.35rem !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stVerticalBlockBorderWrapper"],
   .st-key-ai_portfolio_question_card [data-testid="stVerticalBlockBorderWrapper"] { padding:.65rem !important; }
   .st-key-ai_portfolio_briefing_card h3, .st-key-ai_portfolio_question_card h3 { font-size:14px !important; line-height:1.25 !important; letter-spacing:-.01em !important; }
   .st-key-ai_portfolio_briefing_card [data-testid="stMarkdownContainer"] p { margin:.1rem 0 !important; font-size:12px !important; line-height:1.4 !important; }
-  .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:11px !important; line-height:1.35 !important; }
-  .st-key-ai_portfolio_briefing_card .stButton > button { width:max-content !important; min-height:30px !important; padding:.3rem .65rem !important; border-radius:7px !important; font-size:11px !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:12px !important; }
+  .st-key-ai_portfolio_briefing_card [data-testid="stCaptionContainer"] { font-size:10px !important; line-height:1.3 !important; }
+  .st-key-ai_portfolio_briefing_card .stButton > button { width:110px !important; min-height:28px !important; padding:.25rem .5rem !important; border-radius:6px !important; font-size:10px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stTextArea"] label { font-size:11px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stTextArea"] textarea { height:72px !important; min-height:72px !important; padding:7px 8px !important; font-size:12px !important; line-height:1.35 !important; }
   .st-key-ai_portfolio_question_card [data-testid="stForm"] { border:0 !important; padding:0 !important; }
-  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { min-height:28px !important; padding:.28rem .65rem !important; border-radius:7px !important; font-size:11px !important; }
+  .st-key-ai_portfolio_question_card [data-testid="stFormSubmitButton"] button { width:110px !important; min-height:28px !important; padding:.25rem .5rem !important; border-radius:6px !important; font-size:10px !important; }
   .st-key-ai_portfolio_question_card [data-testid="stCaptionContainer"] { font-size:9px !important; line-height:1.3 !important; }
 }
 </style>
@@ -2158,14 +2158,14 @@ elif page == "Market analysis":
 
 elif page == "AI Analyst":
     st.title("AI portfolio analyst")
-    st.write("Build the standard dated portfolio briefing, or ask a separate question about the portfolio. The tables and calculations are prepared by the app; the AI adds cited commentary.")
+    st.caption("Build an evidence-based briefing or ask a separate question about your portfolio.")
     api_key, model, key_source = _openrouter_settings()
     st.caption(f"AI provider: OpenRouter · model: {model} · API key: {key_source}")
 
-    with st.container(border=True, key="ai_portfolio_briefing_card"):
+    with st.container(key="ai_portfolio_briefing_card"):
         st.subheader("Portfolio briefing")
-        st.caption("Creates a dated snapshot of facts, risks, stress scenario and missing data.")
-        briefing_clicked = st.button("Build portfolio briefing", type="primary", key="build_ai_portfolio_briefing", width="content")
+        st.caption("Dated facts, risks, stress scenario and missing data.")
+        briefing_clicked = st.button("Build briefing", type="primary", key="build_ai_portfolio_briefing", width="content")
 
     with st.container(border=True, key="ai_portfolio_question_card"):
         st.subheader("Ask a question about your portfolio")
@@ -2194,13 +2194,13 @@ elif page == "AI Analyst":
         with st.form("ai_portfolio_question_form", border=False):
             portfolio_question = st.text_area(
                 "Your question",
-                placeholder="For example: Which of my ETFs overlap most, and what evidence supports that?",
-                height=72,
+                placeholder="Ask about holdings, risks, overlap, or a company.",
+                height=68,
                 key="ai_portfolio_question",
             )
             ask_question_clicked = st.form_submit_button("Ask AI", type="primary", width="content")
         st.caption(
-            "Speech stays with your browser's dictation service. Reset clears the question."
+            "Browser speech service · Clear removes your question"
         )
 
     def run_ai_request(request_question: str, payload: dict, mode: str) -> tuple[str, str, float]:
