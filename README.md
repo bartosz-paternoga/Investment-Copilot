@@ -1,6 +1,10 @@
 # Investment Copilot
 
-Copyright © 2026 Bartosz Paternoga. All rights reserved. No general license is granted to use, modify, or distribute this software.
+Copyright © 2026 Bartosz Paternoga. All rights reserved.
+
+**No license is granted** to use, copy, modify, run, or distribute this software, except for the rights GitHub's Terms of Service grant users to view and fork this public repository on GitHub.
+
+**Disclaimer:** This software is provided “AS IS,” without warranties of any kind. To the fullest extent permitted by law, the author is not liable for damages arising from use of, or inability to use, this software. Nothing in this notice excludes liability that cannot legally be excluded.
 
 **An AI-assisted portfolio analyst and ETF research workspace.** Build dated, evidence-based portfolio briefings, ask questions about your holdings, and explore sourced ETF look-through exposures, concentration risks and market stress scenarios. Portfolio figures and scenario calculations are computed by the app; optional AI commentary is grounded in the supplied facts and source references.
 
